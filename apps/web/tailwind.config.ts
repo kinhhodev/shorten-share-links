@@ -1,0 +1,32 @@
+import type { Config } from 'tailwindcss';
+
+export default {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          DEFAULT: 'hsl(var(--brand))',
+          fg: 'hsl(var(--brand-fg))',
+        },
+        bg: 'hsl(var(--bg))',
+        surface: 'hsl(var(--surface))',
+        text: 'hsl(var(--text))',
+        muted: 'hsl(var(--muted))',
+        border: 'hsl(var(--border))',
+        danger: 'hsl(var(--danger))',
+        success: 'hsl(var(--success))',
+      },
+      borderRadius: {
+        sm: '10px',
+        md: '14px',
+        lg: '18px',
+      },
+      boxShadow: {
+        card: '0 10px 30px -18px rgba(0,0,0,0.35)',
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;
+

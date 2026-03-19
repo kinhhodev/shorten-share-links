@@ -1,0 +1,28 @@
+{
+  "name": "shorten-share-links",
+  "version": "1.0.0",
+  "description": "Create Shorten Link from long link and share to everyone",
+  "private": true,
+  "packageManager": "npm@10",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @ssl/api & npm run dev -w @ssl/web",
+    "build": "npm run build -w @ssl/api && npm run build -w @ssl/web",
+    "lint": "npm run lint -ws",
+    "format": "prettier . -w",
+    "typecheck": "npm run typecheck -ws"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.1"
+  }
+}

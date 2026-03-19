@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 0 0% 100%;
+  --surface: 0 0% 100%;
+  --text: 222 47% 11%;
+  --muted: 215 16% 47%;
+  --border: 214 32% 91%;
+  --brand: 262 83% 58%;
+  --brand-fg: 0 0% 100%;
+  --danger: 0 84% 60%;
+  --success: 142 72% 29%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 222 47% 7%;
+    --surface: 222 47% 10%;
+    --text: 210 40% 96%;
+    --muted: 215 16% 65%;
+    --border: 217 19% 25%;
+    --brand: 262 83% 68%;
+    --brand-fg: 222 47% 7%;
+    --danger: 0 84% 70%;
+    --success: 142 72% 45%;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-text antialiased;
+}
+
