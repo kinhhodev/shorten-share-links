@@ -1,8 +1,8 @@
 # shorten-share-links
 
-Monorepo rút gọn link với:
-- **FE**: React + Tailwind (`apps/web`)
-- **BE**: Fastify + Drizzle + Postgres + Redis (`apps/api`)
+Source đã được **tách riêng**:
+- **FE**: React + Tailwind (`frontend/web`)
+- **BE**: Fastify + Drizzle + Postgres + Redis (`backend/api`)
 
 ## Routing (khuyến nghị để nhanh + tránh xung đột SPA)
 - **API**: `http://localhost:3001/api/*`
@@ -25,19 +25,35 @@ Copy `.env.example` thành `.env` (hoặc export env vars tương đương) cho 
 cp .env.example .env
 ```
 
+Lưu ý: nếu `JWT_SECRET`/`COOKIE_SECRET` có ký tự `#` thì hãy **bọc trong dấu nháy** (vd `JWT_SECRET="abc#def..."`) hoặc dùng chuỗi chỉ gồm chữ/số để tránh bị dotenv cắt mất phần sau `#`.
+
 ## Chạy local
-### 1) Postgres/Redis
-Tạo DB `ssl` và đảm bảo `DATABASE_URL` đúng.
+### 1) Postgres/Redis (Docker Compose)
+
+```bash
+docker compose up -d
+```
+
+DB mặc định:
+- Postgres: `localhost:5432` (db `ssl`, user/pass `postgres/postgres`)
+- Redis: `localhost:6379`
 
 ### 2) Migrate DB
 ```bash
-cd apps/api
+cd backend/api
 npm run db:migrate
 ```
 
 ### 3) Run dev
-Từ root:
+Chạy riêng từng service:
+
 ```bash
+cd backend/api
+npm run dev
+```
+
+```bash
+cd frontend/web
 npm run dev
 ```
 
@@ -52,6 +68,3 @@ npm run dev
 - `DELETE /api/links/:id` (login)
 - `GET /r/:code`
 - `GET /r/:project/:code`
-
-# shorten-share-links
-Create Shorten Link from long link and share to everyone

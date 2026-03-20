@@ -1,0 +1,53 @@
+@config "../tailwind.config.cjs";
+
+/*
+  VL Axiforma: thêm file font vào src/assets/fonts/ rồi bật @font-face, ví dụ:
+  @font-face {
+    font-family: 'VL Axiforma';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('./assets/fonts/VLAxiforma-Regular.woff2') format('woff2');
+  }
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 0 0% 100%;
+  --surface: 0 0% 100%;
+  --text: 0 0% 0%;
+  --muted: 220 10% 35%;
+  --border: 212 100% 92%;
+  --brand: 210 100% 50%;
+  --brand-fg: 0 0% 100%;
+  --danger: 0 84% 60%;
+  --success: 142 72% 29%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 222 47% 7%;
+    --surface: 222 47% 10%;
+    --text: 210 40% 96%;
+    --muted: 215 16% 70%;
+    --border: 217 19% 25%;
+    --brand: 210 100% 68%;
+    --brand-fg: 222 47% 7%;
+    --danger: 0 84% 70%;
+    --success: 142 72% 45%;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-text antialiased font-sans;
+}
+
