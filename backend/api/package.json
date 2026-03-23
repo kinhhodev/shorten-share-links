@@ -1,5 +1,5 @@
 {
-  "name": "@ssl/api",
+  "name": "@backend/api",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed:bulk": "tsx scripts/seed-bulk.ts",
     "test": "node --import tsx --test src/__tests__/code.test.ts src/__tests__/schemas.test.ts src/__tests__/urlPolicy.test.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit"

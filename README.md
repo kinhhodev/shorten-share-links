@@ -7,6 +7,8 @@ Source đã được **tách riêng**:
 ## Trùng alias (theo owner)
 Unique trên DB là **`(project, code, owner_user_id)`** (cùng `project` + `code` nhưng **user khác** vẫn được tạo). Trùng **cùng một** user (hoặc cùng ẩn danh) → API thử `alias`, `alias-1`, `alias-2`, … (tối đa 100 lần). Migration `0003` dùng **`NULLS NOT DISTINCT`** (PostgreSQL **15+**; Docker image hiện tại: 16).
 
+**Xóa mềm chủ đề (Thùng rác):** migration `0004` thêm `deleted_at`, `trash_batch_id`. Unique chỉ áp dụng khi **`deleted_at IS NULL`** — có thể tạo link mới trùng mã với bản đã xóa mềm; **khôi phục** từ Thùng rác nếu trùng sẽ nhận `409 CONFLICT`.
+
 ## Routing (khuyến nghị để nhanh + tránh xung đột SPA)
 - **API**: `http://localhost:3001/api/*`
 - **Redirect**: `http://localhost:3001/r/*` (cache-first, rất nhanh)
@@ -52,6 +54,16 @@ DB mặc định:
 cd backend/api
 npm run db:migrate
 ```
+
+### (Tuỳ chọn) Seed dữ liệu lớn để test hiệu năng
+Tạo **1000 user** (email `bulk-seed-0@seed.local` …) và **1.000.000 link** trỏ `https://google.com` (mỗi user 1000 link, `project` null).
+
+```bash
+cd backend/api
+SEED_BULK_CONFIRM=1 npm run db:seed:bulk
+```
+
+Cần biến `DATABASE_URL` trong `.env` (root repo). **Chỉ chạy trên DB dev**; chạy lại sẽ trùng email và lỗi. Chi tiết: [`docs/seed-bulk.md`](docs/seed-bulk.md).
 
 ### 3) Run dev
 Chạy riêng từng service:

@@ -28,6 +28,10 @@ export const links = pgTable(
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
+    /** Xóa mềm: redirect & dashboard chỉ thấy bản ghi chưa xóa */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** Cùng một lần xóa cả chủ đề — dùng để nhóm trong Thùng rác / khôi phục */
+    trashBatchId: uuid('trash_batch_id'),
   },
   (t) => ({
     lookupIdx: index('links_lookup_idx').on(t.project, t.code),
@@ -35,10 +39,10 @@ export const links = pgTable(
     /** Cùng project + code có thể tồn tại cho owner khác nhau; trùng cùng owner → suffix -1, -2 ở API */
     projectCodeOwnerUnique: uniqueIndex('links_project_code_owner_unique')
       .on(t.project, t.code, t.ownerUserId)
-      .where(sql`${t.project} is not null`),
+      .where(sql`${t.project} is not null and ${t.deletedAt} is null`),
     rootCodeOwnerUnique: uniqueIndex('links_root_code_owner_unique')
       .on(t.code, t.ownerUserId)
-      .where(sql`${t.project} is null`),
+      .where(sql`${t.project} is null and ${t.deletedAt} is null`),
   }),
 );
 

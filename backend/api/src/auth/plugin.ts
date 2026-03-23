@@ -32,10 +32,18 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     },
   });
 
-  app.decorate('authenticate', async function authenticate(request: FastifyRequest) {
-    // Chỉ đọc cookie ssl_token — bỏ qua Authorization: Bearer để tránh token lạ (extension/Postman) làm fail verify.
-    await request.jwtVerify({ onlyCookie: true });
-  });
+  app.decorate(
+    'authenticate',
+    async function authenticate(request: FastifyRequest, reply: FastifyReply) {
+      // Chỉ đọc cookie ssl_token — bỏ qua Authorization: Bearer để tránh token lạ (extension/Postman) làm fail verify.
+      try {
+        await request.jwtVerify({ onlyCookie: true });
+      } catch {
+        /** Không rethrow: tránh log stack FastifyError cho trường hợp chưa đăng nhập (401 bình thường). */
+        return reply.code(401).send({ code: 'UNAUTHORIZED', message: 'Cần đăng nhập' });
+      }
+    },
+  );
 };
 
 export default fp(authPlugin, { name: 'auth' });

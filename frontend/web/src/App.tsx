@@ -1,23 +1,31 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Link,
+  Navigate,
   Route,
   Routes,
   useLocation,
   useNavigate,
   useSearchParams,
 } from 'react-router-dom';
-import type { LinkProjectSummary, MeResponse } from '@ssl/shared';
+import type { LinkProjectSummary, LinkTrashItem, MeResponse } from '@ssl/shared';
 import { DASHBOARD_PROJECT_NONE_QUERY } from '@ssl/shared';
 import { logout, me } from './api/auth';
-import { deleteLink, listLinkProjects, listLinks } from './api/dashboard';
+import {
+  deleteLink,
+  listLinkProjects,
+  listLinks,
+  listTrash,
+  restoreTrashBatch,
+  softDeleteTopic,
+} from './api/dashboard';
 import { createLink } from './api/links';
 import { AuthModal, type AuthMode } from './auth/AuthModal';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader } from './ui/card';
 import { Input } from './ui/input';
 import { UserAccountMenu } from './ui/user-account-menu';
-import { IconCopy, IconTrash } from './ui/icons';
+import { IconChevronDown, IconCopy, IconTrash } from './ui/icons';
 import { getRecaptchaToken } from './lib/recaptcha';
 import { shortRedirectUrl } from './env';
 
@@ -125,6 +133,7 @@ function HomePage({
                     <UserAccountMenu
                       displayName={user.fullName?.trim() ? user.fullName : user.email}
                       onLogout={onLogout}
+                      showTrashLink
                     />
                   ) : null}
                 </div>
@@ -198,7 +207,7 @@ function HomePage({
                       <hr className="border-border w-full" />
 
                       <div className="flex gap-2 sm:flex-row sm:justify-center">
-                        <Button type="button" variant="primary" className="w-full sm:w-auto" onClick={onOpenLogin}>
+                        <Button type="button" variant="primary" className="w-full sm:w-auto border-none" onClick={onOpenLogin}>
                           Đăng nhập
                         </Button>
                         <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={onOpenSignup}>
@@ -209,7 +218,6 @@ function HomePage({
                   ) : null}
 
                 </div>
-
               </form>
             </div>
           </CardContent>
@@ -238,347 +246,561 @@ function LoginPage({ mode, onSuccess }: { mode: 'login' | 'register'; onSuccess:
   );
 }
 
-type ProjectScope = 'all' | 'none' | string;
+type DashboardLinkRow = {
+  id: string;
+  project: string | null;
+  code: string;
+  longUrl: string;
+};
 
-function parseProjectScope(param: string | null): ProjectScope {
-  if (param === null || param === '') return 'all';
-  if (param === DASHBOARD_PROJECT_NONE_QUERY) return 'none';
-  return param;
+const DASHBOARD_PAGE_SIZE = 20;
+
+function DashboardTopicAccordion({
+  row,
+  qApplied,
+  expanded,
+  onToggle,
+  onRefreshProjects,
+  deletingTopic,
+  onDeleteTopic,
+  setError,
+  listVersion,
+}: {
+  row: LinkProjectSummary;
+  qApplied: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onRefreshProjects: () => Promise<void>;
+  deletingTopic: boolean;
+  onDeleteTopic: () => Promise<void>;
+  setError: (msg: string | null) => void;
+  /** Tăng sau khi danh sách chủ đề / link thay đổi — refetch bảng con */
+  listVersion: number;
+}) {
+  const projectParam = row.project === null ? DASHBOARD_PROJECT_NONE_QUERY : row.project!;
+  const label = row.project === null ? 'Không chủ đề' : row.project;
+
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState<DashboardLinkRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setPage(1);
+  }, [qApplied]);
+
+  useEffect(() => {
+    if (!expanded) {
+      setPage(1);
+    }
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await listLinks({
+          page,
+          pageSize: DASHBOARD_PAGE_SIZE,
+          q: qApplied || undefined,
+          project: projectParam,
+        });
+        if (cancelled) return;
+        setItems(res.items);
+        setTotal(res.total);
+        if (res.items.length === 0 && res.total > 0 && page > 1) {
+          setPage((p) => Math.max(1, p - 1));
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Có lỗi xảy ra');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, projectParam, qApplied, page, setError, listVersion]);
+
+  const emptyMsg = qApplied.trim()
+    ? 'Không có link nào khớp tìm kiếm.'
+    : 'Chưa có link trong chủ đề này.';
+
+  const totalPages = Math.max(1, Math.ceil(total / DASHBOARD_PAGE_SIZE));
+
+  return (
+    <div className="rounded-md border border-border">
+      <div className="flex items-stretch gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-3 text-left text-sm hover:bg-bg/80 bg-transparent border-none focus:outline-none focus:ring-2 focus:ring-brand/40"
+          onClick={onToggle}
+          aria-expanded={expanded}
+        >
+          <IconChevronDown
+            className={`h-4 w-4 shrink-0 text-muted transition-transform ${expanded ? 'rotate-180' : ''}`}
+          />
+          <span className="min-w-0 font-medium text-text">{label}</span>
+          <span className="shrink-0 text-xs text-muted">({row.total})</span>
+        </button>
+        <div className="flex shrink-0 items-center pr-2">
+          <Button
+            size="sm"
+            variant="danger"
+            className="h-9 w-9 shrink-0 border-none p-0 text-[#fff]"
+            disabled={deletingTopic || row.total === 0}
+            title="Chuyển chủ đề vào Thùng rác (xóa mềm)"
+            aria-label="Chuyển chủ đề vào Thùng rác"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onDeleteTopic();
+            }}
+          >
+            <IconTrash className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+      {expanded ? (
+        <div className="border-t border-border">
+          {loading ? (
+            <div className="px-4 py-6 text-center text-sm text-muted">Đang tải danh sách link…</div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-bg text-muted">
+                    <tr>
+                      <th className="p-3">Tên rút gọn</th>
+                      <th className="p-3 min-w-[200px]">Link rút gọn</th>
+                      <th className="p-3 w-[1%] whitespace-nowrap">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => {
+                      const shortUrl = shortRedirectUrl(it.project, it.code);
+                      return (
+                        <tr key={it.id} className="border-t border-border">
+                          <td className="p-3 align-middle font-mono">{it.code}</td>
+                          <td className="p-3 align-middle">
+                            <a
+                              href={shortUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="min-w-0 font-mono text-sm text-brand underline-offset-2 hover:underline break-all"
+                              title={shortUrl}
+                            >
+                              {shortUrl}
+                            </a>
+                          </td>
+                          <td className="p-3 align-middle">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-9 w-9 shrink-0 p-0"
+                                title="Sao chép link"
+                                aria-label="Sao chép link rút gọn"
+                                onClick={async () => {
+                                  await navigator.clipboard.writeText(shortUrl);
+                                }}
+                              >
+                                <IconCopy className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="danger"
+                                className="h-9 w-9 shrink-0 border-none p-0 text-[#fff]"
+                                title="Xóa link"
+                                aria-label="Xóa link"
+                                onClick={async () => {
+                                  if (
+                                    !window.confirm(
+                                      'Xóa link này vĩnh viễn? Không thể hoàn tác.',
+                                    )
+                                  ) {
+                                    return;
+                                  }
+                                  try {
+                                    await deleteLink(it.id);
+                                    await onRefreshProjects();
+                                  } catch (e: unknown) {
+                                    setError(e instanceof Error ? e.message : 'Không xóa được link');
+                                  }
+                                }}
+                              >
+                                <IconTrash className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {items.length === 0 ? (
+                      <tr>
+                        <td className="p-3 text-muted" colSpan={3}>
+                          {emptyMsg}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+
+              {total > DASHBOARD_PAGE_SIZE ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-sm text-muted">
+                  <span>
+                    Trang {page} / {totalPages} — {total} link
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={page <= 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    >
+                      Trước
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={page >= totalPages}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
+                      Sau
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
-function DashboardPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const scope = parseProjectScope(searchParams.get('project'));
+function DashboardChrome({
+  user,
+  onLogout,
+  children,
+}: {
+  user: MeResponse;
+  onLogout: () => void | Promise<void>;
+  children: ReactNode;
+}) {
+  const { pathname } = useLocation();
+  const onTrash = pathname.endsWith('/trash');
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <Link
+                to="/dashboard"
+                className={`text-2xl font-semibold no-underline ${
+                  !onTrash ? 'font-medium text-text' : 'text-muted hover:text-text'
+                }`}
+              >
+              Dashboard
+            </Link>
+            <nav
+              className="flex flex-wrap items-center gap-1 text-sm"
+              aria-label="Khu vực dashboard"
+            >
+              <Link
+                to="/dashboard/trash"
+                className={`rounded-md px-2 py-1 no-underline ${
+                  onTrash ? 'bg-brand/15 font-medium text-text' : 'text-muted hover:text-text'
+                }`}
+              >
+                Thùng rác
+              </Link>
+            </nav>
+            <Link to="/">
+              <Button size="sm" variant="primary" className="shrink-0 border-none sm:w-auto">
+                Tạo link nhanh
+              </Button>
+            </Link>
+          </div>
+          <UserAccountMenu
+            showDashboard={false}
+            showTrashLink={false}
+            displayName={user.fullName?.trim() ? user.fullName : user.email}
+            onLogout={onLogout}
+            className="shrink-0"
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+function DashboardTopicsPage() {
+  const [searchParams] = useSearchParams();
 
   const [projectSummaries, setProjectSummaries] = useState<LinkProjectSummary[]>([]);
-  const [items, setItems] = useState<
-    {
-      id: string;
-      project: string | null;
-      code: string;
-      longUrl: string;
-    }[]
-  >([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [listVersion, setListVersion] = useState(0);
   const [qInput, setQInput] = useState('');
   const [qApplied, setQApplied] = useState('');
   const [loadingProjects, setLoadingProjects] = useState(true);
-  const [loadingLinks, setLoadingLinks] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
+  const [deletingTopicKey, setDeletingTopicKey] = useState<string | null>(null);
 
-  const pageSize = 20;
-
-  function setScope(next: ProjectScope) {
-    setSearchParams(
-      (prev) => {
-        const p = new URLSearchParams(prev);
-        if (next === 'all') p.delete('project');
-        else if (next === 'none') p.set('project', DASHBOARD_PROJECT_NONE_QUERY);
-        else p.set('project', next);
-        return p;
-      },
-      { replace: true },
-    );
-    setPage(1);
-  }
-
-  async function refreshProjects() {
+  const refreshProjects = useCallback(async () => {
     setLoadingProjects(true);
     try {
       const res = await listLinkProjects();
       setProjectSummaries(res.items);
+      setListVersion((v) => v + 1);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Không tải được danh sách chủ đề');
     } finally {
       setLoadingProjects(false);
     }
-  }
-
-  async function refreshLinks() {
-    setLoadingLinks(true);
-    setError(null);
-    try {
-      const projectParam =
-        scope === 'all' ? undefined : scope === 'none' ? DASHBOARD_PROJECT_NONE_QUERY : scope;
-      const res = await listLinks({
-        page,
-        pageSize,
-        q: qApplied || undefined,
-        project: projectParam,
-      });
-      setItems(res.items);
-      setTotal(res.total);
-      if (res.items.length === 0 && res.total > 0 && page > 1) {
-        setPage((p) => Math.max(1, p - 1));
-      }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Có lỗi xảy ra');
-    } finally {
-      setLoadingLinks(false);
-    }
-  }
-
-  useEffect(() => {
-    refreshProjects();
   }, []);
 
   useEffect(() => {
-    refreshLinks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- scope/page/qApplied drive list
-  }, [scope, page, qApplied]);
+    void refreshProjects();
+  }, [refreshProjects]);
+
+  /** Mở đúng chủ đề khi vào `/dashboard?project=...` */
+  useEffect(() => {
+    const p = searchParams.get('project');
+    if (!p) return;
+    const key = p === DASHBOARD_PROJECT_NONE_QUERY ? '__none__' : p;
+    setExpandedTopics((prev) => ({ ...prev, [key]: true }));
+  }, [searchParams]);
 
   const totalAllLinks = useMemo(
     () => projectSummaries.reduce((s, it) => s + it.total, 0),
     [projectSummaries],
   );
 
-  const createLinkHref =
-    scope === 'all'
-      ? '/'
-      : scope === 'none'
-        ? `/?project=${DASHBOARD_PROJECT_NONE_QUERY}`
-        : `/?project=${encodeURIComponent(scope)}`;
+  const softDeleteTopicFlow = useCallback(
+    async (project: string | null) => {
+      const key = project === null ? '__none__' : project;
+      if (
+        !window.confirm(
+          project === null
+            ? 'Chuyển toàn bộ link “Không chủ đề” vào Thùng rác? Có thể khôi phục sau.'
+            : `Chuyển toàn bộ link trong chủ đề “${project}” vào Thùng rác? Có thể khôi phục sau.`,
+        )
+      ) {
+        return;
+      }
+      setDeletingTopicKey(key);
+      setError(null);
+      try {
+        await softDeleteTopic(project);
+        setExpandedTopics((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+        await refreshProjects();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Không chuyển được chủ đề vào thùng rác');
+      } finally {
+        setDeletingTopicKey(null);
+      }
+    },
+    [refreshProjects],
+  );
 
-  const emptyMessage =
+  const emptyTopicsMessage =
     totalAllLinks === 0
       ? 'Chưa có link nào. Tạo link từ trang chủ hoặc bấm “Tạo link nhanh”.'
-      : scope === 'all'
-        ? 'Không có link nào khớp bộ lọc.'
-        : 'Không có link trong chủ đề này (hoặc không khớp tìm kiếm).';
+      : null;
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="flex gap-4 items-center text-2xl font-semibold text-text">
-              Dashboard
-              <Link to={createLinkHref}>
-                <Button size="sm" variant="primary" className="sm:w-auto shrink-0 border-none">
-                  Tạo link nhanh
-                </Button>
-              </Link>
-            </h1>
+    <>
+      {error ? <div className="text-sm text-danger">{error}</div> : null}
+
+      <div className="min-w-0 space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="flex flex-col gap-2 flex-1 space-y-1">
+            <label className="text-xs font-bold text-muted">Tìm kiếm (Tên rút gọn / URL)</label>
+            <div className="flex gap-2">
+              <Input
+                value={qInput}
+                onChange={(e) => setQInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setQApplied(qInput.trim());
+                  }
+                }}
+                placeholder="Link hoặc mã code sau đó nhấn Enter"
+                className="flex-1"
+              />
+            </div>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {error ? <div className="text-sm text-danger">{error}</div> : null}
 
-        <div className="flex flex-col gap-4 lg:flex-row">
-          <aside className="lg:w-56 shrink-0 space-y-2">
-            <div className="text-xs font-bold uppercase tracking-wide text-muted">Chủ đề</div>
+        {loadingProjects ? (
+          <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
+            Đang tải danh sách chủ đề…
+          </div>
+        ) : emptyTopicsMessage ? (
+          <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
+            {emptyTopicsMessage}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {projectSummaries.map((row) => {
+              const projectKey = row.project === null ? '__none__' : row.project!;
+              return (
+                <DashboardTopicAccordion
+                  key={projectKey}
+                  row={row}
+                  qApplied={qApplied}
+                  expanded={!!expandedTopics[projectKey]}
+                  listVersion={listVersion}
+                  onToggle={() =>
+                    setExpandedTopics((prev) => ({
+                      ...prev,
+                      [projectKey]: !prev[projectKey],
+                    }))
+                  }
+                  onRefreshProjects={refreshProjects}
+                  deletingTopic={deletingTopicKey === projectKey}
+                  onDeleteTopic={() => softDeleteTopicFlow(row.project)}
+                  setError={setError}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
 
-            <div className="lg:hidden">
-              <select
-                className="h-12 w-full rounded-md border border-border bg-bg py-2 pl-3 text-sm text-text"
-                value={scope === 'all' ? '' : scope === 'none' ? DASHBOARD_PROJECT_NONE_QUERY : scope}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === '') setScope('all');
-                  else if (v === DASHBOARD_PROJECT_NONE_QUERY) setScope('none');
-                  else setScope(v);
+function DashboardTrashPage() {
+  const [items, setItems] = useState<LinkTrashItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await listTrash();
+      setItems(res.items);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Không tải được thùng rác');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading) {
+    return (
+      <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
+        Đang tải thùng rác…
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {error ? <div className="text-sm text-danger">{error}</div> : null}
+      {items.length === 0 ? (
+        <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
+          Thùng rác trống. Xóa chủ đề ở tab &quot;Chủ đề&quot; để chuyển link vào đây.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((it) => (
+            <div
+              key={it.batchId}
+              className="flex flex-col gap-2 rounded-md border border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-text">{it.displayLabel}</div>
+                <div className="text-xs text-muted">
+                  {it.linkCount} link · đã xóa {new Date(it.deletedAt).toLocaleString('vi-VN')}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="shrink-0 self-start sm:self-center"
+                disabled={restoringId === it.batchId}
+                onClick={async () => {
+                  if (!window.confirm('Khôi phục toàn bộ link trong mục này?')) return;
+                  setRestoringId(it.batchId);
+                  setError(null);
+                  try {
+                    await restoreTrashBatch(it.batchId);
+                    await load();
+                  } catch (e: unknown) {
+                    setError(e instanceof Error ? e.message : 'Không khôi phục được');
+                  } finally {
+                    setRestoringId(null);
+                  }
                 }}
               >
-                <option value="">Tất cả ({totalAllLinks})</option>
-                {projectSummaries.map((row) => (
-                  <option
-                    key={row.project === null ? '__null__' : row.project}
-                    value={row.project === null ? DASHBOARD_PROJECT_NONE_QUERY : row.project!}
-                  >
-                    {row.project === null ? 'Không chủ đề' : row.project} ({row.total})
-                  </option>
-                ))}
-              </select>
+                Khôi phục
+              </Button>
             </div>
-            <nav className="hidden lg:flex flex-col gap-1">
-              <button
-                type="button"
-                onClick={() => setScope('all')}
-                className={`rounded-md px-3 py-2 text-left text-sm ${
-                  scope === 'all' ? 'bg-brand/15 text-text font-medium' : 'text-muted hover:bg-bg'
-                }`}
-              >
-                Tất cả
-                <span className="ml-1 text-xs opacity-80">({totalAllLinks})</span>
-              </button>
-              {loadingProjects ? (
-                <div className="px-3 py-2 text-xs text-muted">Đang tải chủ đề…</div>
-              ) : (
-                projectSummaries.map((row) => {
-                  const key = row.project === null ? 'none' : row.project;
-                  const active =
-                    (row.project === null && scope === 'none') ||
-                    (row.project !== null && scope === row.project);
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setScope(row.project === null ? 'none' : row.project!)}
-                      className={`rounded-md px-3 py-2 text-left text-sm ${
-                        active ? 'bg-brand/15 text-text font-medium' : 'text-muted hover:bg-bg'
-                      }`}
-                    >
-                      {row.project === null ? 'Không chủ đề' : row.project}
-                      <span className="ml-1 text-xs opacity-80">({row.total})</span>
-                    </button>
-                  );
-                })
-              )}
-            </nav>
-          </aside>
-
-          <div className="min-w-0 flex-1 space-y-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-              <div className="flex flex-col gap-2 flex-1 space-y-1">
-                <label className="text-xs font-bold text-muted">Tìm kiếm (Tên rút gọn / URL)</label>
-                <div className="flex gap-2">
-                  <Input
-                    value={qInput}
-                    onChange={(e) => setQInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        setQApplied(qInput.trim());
-                        setPage(1);
-                      }
-                    }}
-                    placeholder="Link hoặc mã code sau đó nhấn Enter"
-                    className="flex-1"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {loadingLinks ? (
-              <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
-                Đang tải danh sách link…
-              </div>
-            ) : (
-              <>
-                <div className="overflow-x-auto rounded-md border border-border">
-                  <table className="min-w-full text-left text-sm">
-                    <thead className="bg-bg text-muted">
-                      <tr>
-                        <th className="p-3">Chủ đề</th>
-                        <th className="p-3">Tên rút gọn</th>
-                        <th className="p-3 min-w-[200px]">Link rút gọn</th>
-                        <th className="p-3 w-[1%] whitespace-nowrap">Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((it) => {
-                        const shortUrl = shortRedirectUrl(it.project, it.code);
-                        return (
-                          <tr key={it.id} className="border-t border-border">
-                            <td className="p-3 align-middle">
-                              {it.project === null ? (
-                                <span className="text-muted">Không chủ đề</span>
-                              ) : (
-                                <span className="font-medium text-text">{it.project}</span>
-                              )}
-                            </td>
-                            <td className="p-3 align-middle font-mono">{it.code}</td>
-                            <td className="p-3 align-middle">
-                              <a
-                                href={shortUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="min-w-0 font-mono text-sm text-brand underline-offset-2 hover:underline break-all"
-                                title={shortUrl}
-                              >
-                                {shortUrl}
-                              </a>
-                            </td>
-                            <td className="p-3 align-middle">
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  className="h-9 w-9 shrink-0 p-0"
-                                  title="Sao chép link"
-                                  aria-label="Sao chép link rút gọn"
-                                  onClick={async () => {
-                                    await navigator.clipboard.writeText(shortUrl);
-                                  }}
-                                >
-                                  <IconCopy className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="danger"
-                                  className="h-9 w-9 shrink-0 border-none p-0 text-[#fff]"
-                                  title="Xóa link"
-                                  aria-label="Xóa link"
-                                  onClick={async () => {
-                                    if (
-                                      !window.confirm(
-                                        'Xóa link này vĩnh viễn? Không thể hoàn tác.',
-                                      )
-                                    ) {
-                                      return;
-                                    }
-                                    try {
-                                      await deleteLink(it.id);
-                                      await refreshProjects();
-                                      await refreshLinks();
-                                    } catch (e: unknown) {
-                                      setError(
-                                        e instanceof Error ? e.message : 'Không xóa được link',
-                                      );
-                                    }
-                                  }}
-                                >
-                                  <IconTrash className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {items.length === 0 ? (
-                        <tr>
-                          <td className="p-3 text-muted" colSpan={4}>
-                            {emptyMessage}
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-
-                {total > pageSize ? (
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
-                    <span>
-                      Trang {page} / {Math.max(1, Math.ceil(total / pageSize))} — {total} link
-                    </span>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={page <= 1}
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      >
-                        Trước
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={page >= Math.ceil(total / pageSize)}
-                        onClick={() => setPage((p) => p + 1)}
-                      >
-                        Sau
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
+          ))}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </>
   );
+}
+
+function DashboardNestedRoutes({
+  user,
+  onLogout,
+}: {
+  user: MeResponse;
+  onLogout: () => void | Promise<void>;
+}) {
+  return (
+    <DashboardChrome user={user} onLogout={onLogout}>
+      <Routes>
+        <Route index element={<DashboardTopicsPage />} />
+        <Route path="trash" element={<DashboardTrashPage />} />
+      </Routes>
+    </DashboardChrome>
+  );
+}
+
+/** Dashboard chỉ dành cho user đã đăng nhập; anonymous không gọi API (tránh 401). */
+function DashboardRouteGate({
+  authReady,
+  user,
+  onLogout,
+}: {
+  authReady: boolean;
+  user: MeResponse | null;
+  onLogout: () => void | Promise<void>;
+}) {
+  if (!authReady) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center px-4 text-sm text-muted">
+        Đang kiểm tra phiên đăng nhập…
+      </div>
+    );
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  return <DashboardNestedRoutes user={user} onLogout={onLogout} />;
 }
 
 function App() {
@@ -587,6 +809,7 @@ function App() {
   const center = location.pathname === '/';
 
   const [user, setUser] = useState<MeResponse | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [authModal, setAuthModal] = useState<AuthMode | null>(null);
 
   const openLogin = useCallback(() => {
@@ -605,6 +828,8 @@ function App() {
       setUser(u);
     } catch {
       setUser(null);
+    } finally {
+      setAuthReady(true);
     }
   }, []);
 
@@ -615,6 +840,12 @@ function App() {
   const hasSession = !!user;
   const userLabel = user ? `${user.fullName || user.email}` : undefined;
 
+  const handleLogout = useCallback(async () => {
+    await logout();
+    setUser(null);
+    nav('/');
+  }, [nav]);
+
   return (
     <>
       <Shell
@@ -623,15 +854,7 @@ function App() {
         userLabel={userLabel}
         onOpenLogin={openLogin}
         onOpenSignup={openSignup}
-        onLogout={
-          hasSession
-            ? async () => {
-                await logout();
-                setUser(null);
-                nav('/');
-              }
-            : undefined
-        }
+        onLogout={hasSession ? handleLogout : undefined}
       >
         <Routes>
           <Route
@@ -640,15 +863,7 @@ function App() {
               <HomePage
                 hasSession={hasSession}
                 user={user}
-                onLogout={
-                  hasSession
-                    ? async () => {
-                        await logout();
-                        setUser(null);
-                        nav('/');
-                      }
-                    : undefined
-                }
+                onLogout={hasSession ? handleLogout : undefined}
                 onOpenLogin={openLogin}
                 onOpenSignup={openSignup}
               />
@@ -656,7 +871,10 @@ function App() {
           />
           <Route path="/login" element={<LoginPage mode="login" onSuccess={refreshUser} />} />
           <Route path="/register" element={<LoginPage mode="register" onSuccess={refreshUser} />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route
+            path="/dashboard/*"
+            element={<DashboardRouteGate authReady={authReady} user={user} onLogout={handleLogout} />}
+          />
         </Routes>
       </Shell>
 

@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
-import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
-import { CreateLinkBodySchema } from '@ssl/shared';
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { CreateLinkBodySchema, DASHBOARD_PROJECT_NONE_QUERY, ProjectSchema } from '@ssl/shared';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { links } from '../db/schema';
+import { redis } from '../cache/redis';
 import { pgCodeDeep, toPublicError } from '../http/errors';
 import { resolveOwnerUserIdFromCookieOrNull } from '../auth/resolveOwnerUserId';
 import { codeForCustomAliasAttempt } from '../links/customAliasCode';
@@ -166,6 +168,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
 
     const where = and(
       eq(links.ownerUserId, req.user.sub),
+      isNull(links.deletedAt),
       projectFilter,
       q.q
         ? or(ilike(links.code, `%${q.q}%`), ilike(links.longUrl, `%${q.q}%`))
@@ -208,7 +211,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         activeCount: sql<number>`(count(*) filter (where ${links.isActive})::int)`,
       })
       .from(links)
-      .where(eq(links.ownerUserId, userId))
+      .where(and(eq(links.ownerUserId, userId), isNull(links.deletedAt)))
       .groupBy(links.project)
       .orderBy(desc(sql`max(${links.createdAt})`));
 
@@ -219,6 +222,87 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         activeCount: Number(r.activeCount),
       })),
     });
+  });
+
+  /** Postgres/pg có thể trả `timestamp` dạng string — chuẩn hoá trước khi sort/JSON. */
+  function deletedAtToMs(v: unknown): number {
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === 'string' || typeof v === 'number') return new Date(v).getTime();
+    return new Date(String(v)).getTime();
+  }
+
+  function deletedAtToIso(v: unknown): string {
+    return new Date(deletedAtToMs(v)).toISOString();
+  }
+
+  /** Danh sách chủ đề đã xóa mềm (theo batch) — đăng ký trước `/links/:id`. */
+  app.get('/links/trash', { preHandler: app.authenticate }, async (req, reply) => {
+    const userId = req.user.sub;
+    const rows = await db
+      .select({
+        batchId: links.trashBatchId,
+        project: sql<string | null>`min(${links.project})`,
+        deletedAt: sql<Date>`min(${links.deletedAt})`,
+        linkCount: sql<number>`(count(*)::int)`,
+      })
+      .from(links)
+      .where(
+        and(
+          eq(links.ownerUserId, userId),
+          isNotNull(links.deletedAt),
+          isNotNull(links.trashBatchId),
+        ),
+      )
+      .groupBy(links.trashBatchId)
+      .orderBy(desc(sql`min(${links.deletedAt})`));
+
+    type BatchRow = {
+      batchId: string;
+      project: string | null;
+      /** Có thể là Date hoặc string từ driver */
+      deletedAt: unknown;
+      linkCount: number;
+    };
+
+    const list: BatchRow[] = rows
+      .filter((r) => r.batchId !== null)
+      .map((r) => ({
+        batchId: r.batchId!,
+        project: r.project,
+        deletedAt: r.deletedAt,
+        linkCount: Number(r.linkCount),
+      }));
+
+    const byKey = new Map<string, BatchRow[]>();
+    for (const r of list) {
+      const key = r.project === null ? '__none__' : r.project;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(r);
+    }
+
+    const labelByBatch = new Map<string, string>();
+    for (const [, group] of byKey) {
+      group.sort((a, b) => deletedAtToMs(a.deletedAt) - deletedAtToMs(b.deletedAt));
+      const showSuffix = group.length > 1;
+      group.forEach((r, i) => {
+        const base = r.project === null ? 'Không chủ đề' : r.project;
+        const label = showSuffix ? `${base} (${i + 1})` : base;
+        labelByBatch.set(r.batchId, label);
+      });
+    }
+
+    const items = list
+      .map((r) => ({
+        batchId: r.batchId,
+        project: r.project,
+        deletedAt: deletedAtToIso(r.deletedAt),
+        linkCount: r.linkCount,
+        displayLabel:
+          labelByBatch.get(r.batchId) ?? (r.project === null ? 'Không chủ đề' : r.project),
+      }))
+      .sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
+
+    return reply.send({ items });
   });
 
   app.get('/links/:id', { preHandler: app.authenticate }, async (req, reply) => {
@@ -234,12 +318,83 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         createdAt: links.createdAt,
       })
       .from(links)
-      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub)))
+      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub), isNull(links.deletedAt)))
       .limit(1);
 
     const item = row[0];
     if (!item) return reply.code(404).send({ code: 'NOT_FOUND', message: 'Link not found' });
     return reply.send({ ...item, createdAt: item.createdAt.toISOString() });
+  });
+
+  /** Xóa mềm toàn bộ link trong một chủ đề (chuyển vào Thùng rác). */
+  app.post('/links/topics/soft-delete', { preHandler: app.authenticate }, async (req, reply) => {
+    const Body = z.object({
+      project: z.union([z.literal(DASHBOARD_PROJECT_NONE_QUERY), ProjectSchema]),
+    });
+    const body = Body.parse(req.body);
+    const userId = req.user.sub;
+    const projectValue = body.project === DASHBOARD_PROJECT_NONE_QUERY ? null : body.project;
+    const projectCond =
+      projectValue === null ? isNull(links.project) : eq(links.project, projectValue);
+
+    const batchId = randomUUID();
+    const now = new Date();
+
+    const moved = await db
+      .update(links)
+      .set({ deletedAt: now, trashBatchId: batchId })
+      .where(
+        and(eq(links.ownerUserId, userId), isNull(links.deletedAt), projectCond),
+      )
+      .returning({ project: links.project, code: links.code });
+
+    if (moved.length === 0) {
+      return reply.code(400).send({
+        code: 'NO_LINKS',
+        message: 'Không có link nào trong chủ đề này để xóa',
+      });
+    }
+
+    await redis.connect().catch(() => undefined);
+    for (const row of moved) {
+      const key = row.project ? `r:${row.project}:${row.code}` : `r::${row.code}`;
+      await redis.del(key).catch(() => undefined);
+    }
+
+    return reply.send({
+      ok: true,
+      batchId,
+      movedCount: moved.length,
+    });
+  });
+
+  /** Khôi phục một batch đã xóa mềm. */
+  app.post('/links/trash/:batchId/restore', { preHandler: app.authenticate }, async (req, reply) => {
+    const Params = z.object({ batchId: z.string().uuid() });
+    const { batchId } = Params.parse(req.params);
+    const userId = req.user.sub;
+
+    try {
+      const restored = await db
+        .update(links)
+        .set({ deletedAt: null, trashBatchId: null })
+        .where(and(eq(links.ownerUserId, userId), eq(links.trashBatchId, batchId)))
+        .returning({ id: links.id });
+
+      if (restored.length === 0) {
+        return reply.code(404).send({ code: 'NOT_FOUND', message: 'Không tìm thấy batch trong thùng rác' });
+      }
+      return reply.send({ ok: true, restoredCount: restored.length });
+    } catch (err: unknown) {
+      if (pgCodeDeep(err) === '23505') {
+        return reply.code(409).send({
+          code: 'CONFLICT',
+          message:
+            'Không thể khôi phục: đã tồn tại link cùng mã trong chủ đề (trùng code). Xóa hoặc đổi link trùng rồi thử lại.',
+        });
+      }
+      throw err;
+    }
   });
 
   app.patch('/links/:id', { preHandler: app.authenticate }, async (req, reply) => {
@@ -261,7 +416,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
     const updated = await db
       .update(links)
       .set(body)
-      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub)))
+      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub), isNull(links.deletedAt)))
       .returning({
         id: links.id,
         project: links.project,
@@ -282,7 +437,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
 
     const deleted = await db
       .delete(links)
-      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub)))
+      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub), isNull(links.deletedAt)))
       .returning({ id: links.id });
     if (!deleted[0]) return reply.code(404).send({ code: 'NOT_FOUND', message: 'Link not found' });
     return reply.send({ ok: true });

@@ -5,12 +5,12 @@
   "private": true,
   "packageManager": "npm@10",
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "backend/api",
+    "frontend/web"
   ],
   "scripts": {
-    "dev": "npm run dev -w @ssl/api & npm run dev -w @ssl/web",
-    "build": "npm run build -w @ssl/api && npm run build -w @ssl/web",
+    "dev": "npm run dev -w @backend/api & npm run dev -w @frontend/web",
+    "build": "npm run build -w @backend/api && npm run build -w @frontend/web",
     "lint": "npm run lint -ws",
     "format": "prettier . -w",
     "typecheck": "npm run typecheck -ws"
@@ -19,6 +19,7 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "@eslint/js": "^9.39.4",
     "eslint": "^9.39.4",
     "prettier": "^3.8.1",

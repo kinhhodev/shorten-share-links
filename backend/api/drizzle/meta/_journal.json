@@ -29,6 +29,13 @@
       "when": 1774194159463,
       "tag": "0003_clever_surge",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774200000000,
+      "tag": "0004_soft_delete_trash",
+      "breakpoints": true
     }
   ]
 }

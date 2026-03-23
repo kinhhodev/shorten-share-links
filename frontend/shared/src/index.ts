@@ -110,3 +110,21 @@ export const LinkProjectsResponseSchema = z.object({
 });
 
 export type LinkProjectsResponse = z.infer<typeof LinkProjectsResponseSchema>;
+
+/** Một lần xóa chủ đề trong Thùng rác (cùng batch). */
+export const LinkTrashItemSchema = z.object({
+  batchId: z.string().uuid(),
+  project: z.string().nullable(),
+  deletedAt: z.string(),
+  linkCount: z.number().int().min(0),
+  /** Tên hiển thị; trùng tên chủ đề có hậu tố (1), (2), … */
+  displayLabel: z.string(),
+});
+
+export type LinkTrashItem = z.infer<typeof LinkTrashItemSchema>;
+
+export const LinkTrashResponseSchema = z.object({
+  items: z.array(LinkTrashItemSchema),
+});
+
+export type LinkTrashResponse = z.infer<typeof LinkTrashResponseSchema>;

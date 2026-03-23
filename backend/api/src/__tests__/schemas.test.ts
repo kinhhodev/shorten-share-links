@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CreateLinkBodySchema, LinkProjectsResponseSchema } from '../../../shared/src/index';
+import {
+  CreateLinkBodySchema,
+  LinkProjectsResponseSchema,
+  LinkTrashResponseSchema,
+} from '../../../shared/src/index';
 
 test('CreateLinkBodySchema validates URLs', () => {
   assert.throws(() => CreateLinkBodySchema.parse({ longUrl: 'not-a-url' }));
@@ -17,5 +21,20 @@ test('LinkProjectsResponseSchema parses project summary', () => {
   });
   assert.equal(ok.items.length, 2);
   assert.equal(ok.items[1]!.project, null);
+});
+
+test('LinkTrashResponseSchema parses trash list', () => {
+  const ok = LinkTrashResponseSchema.parse({
+    items: [
+      {
+        batchId: '123e4567-e89b-12d3-a456-426614174000',
+        project: 'marketing',
+        deletedAt: '2025-01-01T00:00:00.000Z',
+        linkCount: 3,
+        displayLabel: 'marketing (1)',
+      },
+    ],
+  });
+  assert.equal(ok.items[0]!.displayLabel, 'marketing (1)');
 });
 

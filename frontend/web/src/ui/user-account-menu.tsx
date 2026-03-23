@@ -7,9 +7,14 @@ export function UserAccountMenu({
   displayName,
   onLogout,
   className,
+  showDashboard = true,
+  showTrashLink = false,
 }: {
   displayName: string;
   onLogout: () => void | Promise<void>;
+  showDashboard?: boolean;
+  /** Link tới Thùng rác (dashboard) — ví dụ từ trang chủ khi đã đăng nhập */
+  showTrashLink?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -50,14 +55,26 @@ export function UserAccountMenu({
           role="menu"
           className="absolute left-0 top-full z-20 mt-1 min-w-[11rem] rounded-md border border-border bg-surface py-1 shadow-card"
         >
-          <Link
-            to="/dashboard"
-            role="menuitem"
-            className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-blue-300 cursor-pointer no-underline"
-            onClick={() => setOpen(false)}
-          >
-            Dashboard
-          </Link>
+          {showDashboard ? (
+            <Link
+              to="/dashboard"
+              role="menuitem"
+              className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-blue-300 cursor-pointer no-underline"
+              onClick={() => setOpen(false)}
+            >
+              Dashboard
+            </Link>
+          ) : null}
+          {showTrashLink ? (
+            <Link
+              to="/dashboard/trash"
+              role="menuitem"
+              className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-blue-300 cursor-pointer no-underline"
+              onClick={() => setOpen(false)}
+            >
+              Thùng rác
+            </Link>
+          ) : null}
           <button
             type="button"
             role="menuitem"

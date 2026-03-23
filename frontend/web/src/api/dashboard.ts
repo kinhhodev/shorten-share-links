@@ -1,4 +1,9 @@
-import type { LinkProjectsResponse, ListLinksResponse } from '@ssl/shared';
+import type {
+  LinkProjectsResponse,
+  LinkTrashResponse,
+  ListLinksResponse,
+} from '@ssl/shared';
+import { DASHBOARD_PROJECT_NONE_QUERY } from '@ssl/shared';
 import { apiFetch } from './client';
 
 export async function listLinkProjects() {
@@ -26,5 +31,27 @@ export async function updateLink(id: string, body: { isActive?: boolean; longUrl
 
 export async function deleteLink(id: string) {
   return apiFetch(`/links/${id}`, { method: 'DELETE' });
+}
+
+/** Xóa mềm toàn bộ link trong một chủ đề (chuyển vào Thùng rác). */
+export async function softDeleteTopic(project: string | null) {
+  const body = {
+    project: project === null ? DASHBOARD_PROJECT_NONE_QUERY : project,
+  };
+  return apiFetch<{ ok: boolean; batchId: string; movedCount: number }>(
+    '/links/topics/soft-delete',
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+export async function listTrash() {
+  return apiFetch<LinkTrashResponse>('/links/trash');
+}
+
+export async function restoreTrashBatch(batchId: string) {
+  return apiFetch<{ ok: boolean; restoredCount: number }>(
+    `/links/trash/${encodeURIComponent(batchId)}/restore`,
+    { method: 'POST' },
+  );
 }
 

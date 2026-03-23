@@ -45,7 +45,7 @@ export const redirectRoutes: FastifyPluginAsync = async (app) => {
     const row = await db
       .select({ longUrl: links.longUrl, isActive: links.isActive, expiresAt: links.expiresAt })
       .from(links)
-      .where(and(eq(links.code, code), isNull(links.project)))
+      .where(and(eq(links.code, code), isNull(links.project), isNull(links.deletedAt)))
       .limit(1);
 
     const hit = row[0];
@@ -83,7 +83,9 @@ export const redirectRoutes: FastifyPluginAsync = async (app) => {
     const row = await db
       .select({ longUrl: links.longUrl, isActive: links.isActive, expiresAt: links.expiresAt })
       .from(links)
-      .where(and(eq(links.project, project), eq(links.code, code)))
+      .where(
+        and(eq(links.project, project), eq(links.code, code), isNull(links.deletedAt)),
+      )
       .limit(1);
 
     const hit = row[0];
