@@ -25,6 +25,14 @@ await app.register(cors, {
   credentials: true,
 });
 
+/** Giảm rủi ro clickjacking / MIME sniffing (API + redirect). */
+app.addHook('onRequest', async (_req, reply) => {
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  reply.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+});
+
 await app.register(rateLimit, {
   global: false,
 });

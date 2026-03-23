@@ -18,6 +18,8 @@ export const CreateLinkBodySchema = z.object({
   longUrl: z.string().trim().url(),
   project: ProjectSchema.optional(),
   customAlias: CustomAliasSchema.optional(),
+  /** reCAPTCHA v3 token (server verify khi có RECAPTCHA_SECRET_KEY). */
+  recaptchaToken: z.string().min(1).optional(),
 });
 
 export type CreateLinkBody = z.infer<typeof CreateLinkBodySchema>;

@@ -1,6 +1,18 @@
 import { ZodError } from 'zod';
 import { env } from '../env';
 
+/** Lỗi có mã HTTP cố định (validation bảo mật, reCAPTCHA, …). */
+export class HttpReplyError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HttpReplyError';
+  }
+}
+
 /** Mã lỗi Postgres (vd 23505), kể cả khi bọc bởi DrizzleQueryError (cause chain). */
 export function pgCodeDeep(err: unknown): string | undefined {
   let cur: unknown = err;
@@ -24,6 +36,9 @@ function pgMessage(err: unknown): string | undefined {
 }
 
 export function toPublicError(err: unknown) {
+  if (err instanceof HttpReplyError) {
+    return { statusCode: err.statusCode, code: err.code, message: err.message };
+  }
   if (err instanceof ZodError) {
     return { statusCode: 400, code: 'BAD_REQUEST', message: 'Invalid request', details: err.flatten() };
   }

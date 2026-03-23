@@ -4,6 +4,12 @@ Tài liệu này mô tả **test tự động** (Node built-in test runner) và 
 
 ---
 
+## 0. Bảo mật (tùy chọn)
+
+Xem [`security.md`](security.md): reCAPTCHA v3, kiểm tra URL đích, redirect thống nhất `404`, blocklist host. Khi chưa cấu hình `RECAPTCHA_SECRET_KEY` / `VITE_RECAPTCHA_SITE_KEY`, các bước liên quan reCAPTCHA có thể bỏ qua.
+
+---
+
 ## 1. Chuẩn bị môi trường
 
 | Bước | Mô tả |

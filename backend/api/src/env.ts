@@ -20,6 +20,21 @@ const EnvSchema = z.object({
   COOKIE_SECRET: z.string().min(16).transform((s) => s.trim()),
   APP_ORIGIN: z.string().url().default('http://localhost:5173'),
   BASE_URL: z.string().url().default('http://localhost:3001'),
+  /** Google reCAPTCHA v3 secret (server). Để trống = tắt kiểm tra. */
+  RECAPTCHA_SECRET_KEY: z.string().default(''),
+  /** Ngưỡng điểm tối thiểu (0–1). */
+  RECAPTCHA_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.5),
+  /**
+   * Khi có secret: mặc định chỉ bắt token cho user ẩn danh.
+   * Đặt `true` / `1` để bắt cả user đã đăng nhập khi tạo link.
+   */
+  RECAPTCHA_REQUIRE_FOR_AUTHENTICATED: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  /** Danh sách host (phân tách bằng dấu phẩy) từ chối khi tạo link, ví dụ: evil.com,tracker.io */
+  BLOCKED_URL_HOSTS: z.string().default(''),
 });
 
 export const env = EnvSchema.parse(process.env);

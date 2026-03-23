@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader } from './ui/card';
 import { Input } from './ui/input';
 import { UserAccountMenu } from './ui/user-account-menu';
 import { IconCopy, IconTrash } from './ui/icons';
+import { getRecaptchaToken } from './lib/recaptcha';
 import { shortRedirectUrl } from './env';
 
 function Shell({
@@ -86,10 +87,12 @@ function HomePage({
     setOwnerHint(null);
     setLoading(true);
     try {
+      const recaptchaToken = await getRecaptchaToken('create_link');
       const res = await createLink({
         longUrl: permalink,
         project: projectName.trim() || undefined,
         customAlias: alias.trim() || undefined,
+        ...(recaptchaToken ? { recaptchaToken } : {}),
       });
       setShortUrl(res.shortUrl);
       if (res.ownerUserId === -1) {

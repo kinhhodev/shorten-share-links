@@ -66,6 +66,10 @@ cd frontend/web
 npm run dev
 ```
 
+## Bảo mật (reCAPTCHA, URL, enumeration)
+- Chi tiết: [`docs/security.md`](docs/security.md)
+- **reCAPTCHA v3:** thêm `RECAPTCHA_SECRET_KEY` (API) và `VITE_RECAPTCHA_SITE_KEY` (web). Trước khi có key, hệ thống vẫn chạy (chỉ tắt bước verify).
+
 ## Kiểm thử backend
 - **Unit test (không cần Postgres):** `cd backend/api && npm test`
 - **Manual testcase (checklist + curl):** xem [`docs/backend-manual-testcases.md`](docs/backend-manual-testcases.md)

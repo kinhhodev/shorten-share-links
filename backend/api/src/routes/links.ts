@@ -9,6 +9,8 @@ import { resolveOwnerUserIdFromCookieOrNull } from '../auth/resolveOwnerUserId';
 import { codeForCustomAliasAttempt } from '../links/customAliasCode';
 import { randomCode } from '../links/code';
 import { env } from '../env';
+import { assertRecaptchaIfRequired } from '../security/recaptcha';
+import { assertSafeLongUrl } from '../security/urlPolicy';
 
 function linkInsertValues(
   project: string | null,
@@ -43,6 +45,13 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
       const body = CreateLinkBodySchema.parse(req.body);
 
       const ownerUserId = await resolveOwnerUserIdFromCookieOrNull(req);
+
+      assertSafeLongUrl(body.longUrl);
+      await assertRecaptchaIfRequired(
+        body.recaptchaToken,
+        ownerUserId !== null,
+        typeof req.ip === 'string' ? req.ip : undefined,
+      );
 
       const project = body.project ?? null;
       const customBase = body.customAlias?.trim();
@@ -143,7 +152,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         .trim()
         .optional()
         .transform((v) => (v === '' ? undefined : v)),
-      q: z.string().trim().optional(),
+      q: z.string().trim().max(200).optional(),
     });
     const q = Query.parse(req.query);
     const offset = (q.page - 1) * q.pageSize;
@@ -213,7 +222,8 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/links/:id', { preHandler: app.authenticate }, async (req, reply) => {
-    const id = (req.params as any).id as string;
+    const Params = z.object({ id: z.string().uuid() });
+    const { id } = Params.parse(req.params);
     const row = await db
       .select({
         id: links.id,
@@ -224,7 +234,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         createdAt: links.createdAt,
       })
       .from(links)
-      .where(sql`${links.id} = ${id} and ${links.ownerUserId} = ${req.user.sub}`)
+      .where(and(eq(links.id, id), eq(links.ownerUserId, req.user.sub)))
       .limit(1);
 
     const item = row[0];
@@ -243,6 +253,10 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
 
     const { id } = Params.parse(req.params);
     const body = Body.parse(req.body);
+
+    if (body.longUrl !== undefined) {
+      assertSafeLongUrl(body.longUrl);
+    }
 
     const updated = await db
       .update(links)
