@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export const users = pgTable(
   'users',
@@ -23,9 +23,8 @@ export const links = pgTable(
     project: text('project'),
     code: text('code').notNull(),
     longUrl: text('long_url').notNull(),
+    /** ẩn danh: null; đã đăng nhập: FK users.id */
     ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
-    /** -1 = ẩn danh (owner_user_id null); 0 = user đã đăng nhập (owner_user_id set) */
-    anonymousMarker: integer('anonymous_marker').notNull().default(-1),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
@@ -33,13 +32,12 @@ export const links = pgTable(
   (t) => ({
     lookupIdx: index('links_lookup_idx').on(t.project, t.code),
     ownerIdx: index('links_owner_idx').on(t.ownerUserId, t.createdAt),
-    // Unique for namespaced links: (project, code) when project is not null
-    projectCodeUnique: uniqueIndex('links_project_code_unique')
-      .on(t.project, t.code)
+    /** Cùng project + code có thể tồn tại cho owner khác nhau; trùng cùng owner → suffix -1, -2 ở API */
+    projectCodeOwnerUnique: uniqueIndex('links_project_code_owner_unique')
+      .on(t.project, t.code, t.ownerUserId)
       .where(sql`${t.project} is not null`),
-    // Unique for root links: code when project is null
-    rootCodeUnique: uniqueIndex('links_root_code_unique')
-      .on(t.code)
+    rootCodeOwnerUnique: uniqueIndex('links_root_code_owner_unique')
+      .on(t.code, t.ownerUserId)
       .where(sql`${t.project} is null`),
   }),
 );

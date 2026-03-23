@@ -1,28 +1,28 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: ssl_postgres
+    container_name: shorten_share_links_postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ssl
+      POSTGRES_DB: shorten_share_links
     ports:
       - "5432:5432"
     volumes:
-      - ssl_pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ssl"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shorten_share_links"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   redis:
     image: redis:7-alpine
-    container_name: ssl_redis
+    container_name: shorten_share_links_redis
     ports:
       - "6379:6379"
     volumes:
-      - ssl_redis_data:/data
+      - redis_data:/data
     command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -31,6 +31,6 @@ services:
       retries: 20
 
 volumes:
-  ssl_pg_data:
-  ssl_redis_data:
+  pg_data:
+  redis_data:
 

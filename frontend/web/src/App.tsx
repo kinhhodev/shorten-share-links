@@ -1,23 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { MeResponse } from '@ssl/shared';
+import {
+  Link,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom';
+import type { LinkProjectSummary, MeResponse } from '@ssl/shared';
+import { DASHBOARD_PROJECT_NONE_QUERY } from '@ssl/shared';
 import { logout, me } from './api/auth';
-import { listLinks, updateLink } from './api/dashboard';
+import { deleteLink, listLinkProjects, listLinks } from './api/dashboard';
 import { createLink } from './api/links';
 import { AuthModal, type AuthMode } from './auth/AuthModal';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader } from './ui/card';
 import { Input } from './ui/input';
 import { UserAccountMenu } from './ui/user-account-menu';
+import { IconCopy, IconTrash } from './ui/icons';
+import { shortRedirectUrl } from './env';
 
 function Shell({
   children,
-  onLogout,
   center,
-  hasSession,
-  userLabel,
-  onOpenLogin,
-  onOpenSignup,
+  onLogout: _onLogout,
+  hasSession: _hasSession,
+  userLabel: _userLabel,
+  onOpenLogin: _onOpenLogin,
+  onOpenSignup: _onOpenSignup,
 }: {
   children: React.ReactNode;
   onLogout?: () => void;
@@ -30,42 +40,6 @@ function Shell({
   return (
     <div className="min-h-full bg-bg">
       <div className="mx-auto flex w-full max-w-5xl flex-col min-h-[100svh]">
-        {!center ? (
-          <header className="flex items-center justify-between gap-3 py-2">
-            <Link to="/" className="flex flex-col min-w-0">
-              <div className="text-sm font-semibold text-brand truncate">Shorten & Share Links</div>
-              <div className="text-sm text-muted truncate">Fast redirects with cache-first lookup</div>
-            </Link>
-            <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
-              {hasSession && userLabel ? (
-                <span className="hidden text-xs text-muted sm:inline max-w-[140px] truncate" title={userLabel}>
-                  {userLabel}
-                </span>
-              ) : null}
-              <Link to="/dashboard">
-                <Button variant="secondary" size="sm">
-                  Dashboard
-                </Button>
-              </Link>
-              {!hasSession ? (
-                <>
-                  <Button variant="secondary" size="sm" onClick={onOpenLogin}>
-                    Đăng nhập
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={onOpenSignup}>
-                    Đăng ký
-                  </Button>
-                </>
-              ) : null}
-              {onLogout ? (
-                <Button variant="ghost" size="sm" onClick={onLogout}>
-                  Logout
-                </Button>
-              ) : null}
-            </div>
-          </header>
-        ) : null}
-
         <main className={center ? 'flex flex-1 items-center justify-center' : undefined}>{children}</main>
       </div>
     </div>
@@ -85,6 +59,7 @@ function HomePage({
   user: MeResponse | null;
   onLogout?: () => void | Promise<void>;
 }) {
+  const [searchParams] = useSearchParams();
   const [projectName, setProjectName] = useState('');
   const [alias, setAlias] = useState('');
   const [permalink, setPermalink] = useState('');
@@ -95,6 +70,15 @@ function HomePage({
   const [ownerHint, setOwnerHint] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => permalink.trim().length > 0 && !loading, [permalink, loading]);
+
+  useEffect(() => {
+    const p = searchParams.get('project');
+    if (p === DASHBOARD_PROJECT_NONE_QUERY || p === '') {
+      setProjectName('');
+    } else if (p) {
+      setProjectName(p);
+    }
+  }, [searchParams]);
 
   async function onSubmit() {
     setError(null);
@@ -108,7 +92,7 @@ function HomePage({
         customAlias: alias.trim() || undefined,
       });
       setShortUrl(res.shortUrl);
-      if (res.anonymousMarker === -1 || res.ownerUserId === -1) {
+      if (res.ownerUserId === -1) {
         setOwnerHint('Đã tạo link ẩn danh (không gắn tài khoản). Đăng nhập để quản lý link trong Dashboard.');
       } else {
         setOwnerHint('Link đã lưu vào tài khoản của bạn.');
@@ -142,12 +126,6 @@ function HomePage({
                   ) : null}
                 </div>
               </div>
-
-              <p className="mt-2 text-xs text-muted">
-                {hasSession
-                  ? 'Bạn đang đăng nhập — link tạo ra sẽ hiển thị trong Dashboard.'
-                  : 'Chưa đăng nhập — link được lưu ẩn danh (user_id = -1), không xem được trong Dashboard.'}
-              </p>
 
               {error ? <div className="mt-1 text-sm text-danger">{error}</div> : null}
 
@@ -202,13 +180,13 @@ function HomePage({
                   <Input
                     value={permalink}
                     onChange={(e) => setPermalink(e.target.value)}
-                    placeholder="https://example.com/..."
+                    placeholder="https://example.com/"
                     autoComplete="off"
                   />
                 </div>
 
                 <div className="w-full flex flex-col gap-2">
-                  <Button type="submit" disabled={!canSubmit} className="w-full mt-3">
+                  <Button type="submit" disabled={!canSubmit} className="w-full mt-3 border-none">
                     {loading ? 'Submitting...' : 'Tạo Link'}
                   </Button>
 
@@ -257,86 +235,344 @@ function LoginPage({ mode, onSuccess }: { mode: 'login' | 'register'; onSuccess:
   );
 }
 
+type ProjectScope = 'all' | 'none' | string;
+
+function parseProjectScope(param: string | null): ProjectScope {
+  if (param === null || param === '') return 'all';
+  if (param === DASHBOARD_PROJECT_NONE_QUERY) return 'none';
+  return param;
+}
+
 function DashboardPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const scope = parseProjectScope(searchParams.get('project'));
+
+  const [projectSummaries, setProjectSummaries] = useState<LinkProjectSummary[]>([]);
   const [items, setItems] = useState<
     {
       id: string;
       project: string | null;
       code: string;
       longUrl: string;
-      isActive: boolean;
     }[]
   >([]);
-  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [qInput, setQInput] = useState('');
+  const [qApplied, setQApplied] = useState('');
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [loadingLinks, setLoadingLinks] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
-    setLoading(true);
+  const pageSize = 20;
+
+  function setScope(next: ProjectScope) {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'all') p.delete('project');
+        else if (next === 'none') p.set('project', DASHBOARD_PROJECT_NONE_QUERY);
+        else p.set('project', next);
+        return p;
+      },
+      { replace: true },
+    );
+    setPage(1);
+  }
+
+  async function refreshProjects() {
+    setLoadingProjects(true);
+    try {
+      const res = await listLinkProjects();
+      setProjectSummaries(res.items);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Không tải được danh sách chủ đề');
+    } finally {
+      setLoadingProjects(false);
+    }
+  }
+
+  async function refreshLinks() {
+    setLoadingLinks(true);
     setError(null);
     try {
-      const res = await listLinks({ page: 1, pageSize: 50 });
+      const projectParam =
+        scope === 'all' ? undefined : scope === 'none' ? DASHBOARD_PROJECT_NONE_QUERY : scope;
+      const res = await listLinks({
+        page,
+        pageSize,
+        q: qApplied || undefined,
+        project: projectParam,
+      });
       setItems(res.items);
+      setTotal(res.total);
+      if (res.items.length === 0 && res.total > 0 && page > 1) {
+        setPage((p) => Math.max(1, p - 1));
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Có lỗi xảy ra');
     } finally {
-      setLoading(false);
+      setLoadingLinks(false);
     }
   }
 
   useEffect(() => {
-    refresh();
+    refreshProjects();
   }, []);
+
+  useEffect(() => {
+    refreshLinks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scope/page/qApplied drive list
+  }, [scope, page, qApplied]);
+
+  const totalAllLinks = useMemo(
+    () => projectSummaries.reduce((s, it) => s + it.total, 0),
+    [projectSummaries],
+  );
+
+  const createLinkHref =
+    scope === 'all'
+      ? '/'
+      : scope === 'none'
+        ? `/?project=${DASHBOARD_PROJECT_NONE_QUERY}`
+        : `/?project=${encodeURIComponent(scope)}`;
+
+  const emptyMessage =
+    totalAllLinks === 0
+      ? 'Chưa có link nào. Tạo link từ trang chủ hoặc bấm “Tạo link nhanh”.'
+      : scope === 'all'
+        ? 'Không có link nào khớp bộ lọc.'
+        : 'Không có link trong chủ đề này (hoặc không khớp tìm kiếm).';
 
   return (
     <Card>
       <CardHeader>
-        <h1 className="text-2xl font-semibold text-text">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted">Danh sách link bạn đã tạo (chỉ link có login).</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="flex gap-4 items-center text-2xl font-semibold text-text">
+              Dashboard
+              <Link to={createLinkHref}>
+                <Button size="sm" variant="primary" className="sm:w-auto shrink-0 border-none">
+                  Tạo link nhanh
+                </Button>
+              </Link>
+            </h1>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         {error ? <div className="text-sm text-danger">{error}</div> : null}
-        {loading ? (
-          <div className="text-sm text-muted">Loading...</div>
-        ) : (
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-bg text-muted">
-                <tr>
-                  <th className="p-3">Short</th>
-                  <th className="p-3">Long URL</th>
-                  <th className="p-3">Active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((it) => (
-                  <tr key={it.id} className="border-t border-border">
-                    <td className="p-3 font-mono">{it.project ? `${it.project}/${it.code}` : it.code}</td>
-                    <td className="p-3 max-w-[520px] truncate">{it.longUrl}</td>
-                    <td className="p-3">
+
+        <div className="flex flex-col gap-4 lg:flex-row">
+          <aside className="lg:w-56 shrink-0 space-y-2">
+            <div className="text-xs font-bold uppercase tracking-wide text-muted">Chủ đề</div>
+
+            <div className="lg:hidden">
+              <select
+                className="h-12 w-full rounded-md border border-border bg-bg py-2 pl-3 text-sm text-text"
+                value={scope === 'all' ? '' : scope === 'none' ? DASHBOARD_PROJECT_NONE_QUERY : scope}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === '') setScope('all');
+                  else if (v === DASHBOARD_PROJECT_NONE_QUERY) setScope('none');
+                  else setScope(v);
+                }}
+              >
+                <option value="">Tất cả ({totalAllLinks})</option>
+                {projectSummaries.map((row) => (
+                  <option
+                    key={row.project === null ? '__null__' : row.project}
+                    value={row.project === null ? DASHBOARD_PROJECT_NONE_QUERY : row.project!}
+                  >
+                    {row.project === null ? 'Không chủ đề' : row.project} ({row.total})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <nav className="hidden lg:flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={() => setScope('all')}
+                className={`rounded-md px-3 py-2 text-left text-sm ${
+                  scope === 'all' ? 'bg-brand/15 text-text font-medium' : 'text-muted hover:bg-bg'
+                }`}
+              >
+                Tất cả
+                <span className="ml-1 text-xs opacity-80">({totalAllLinks})</span>
+              </button>
+              {loadingProjects ? (
+                <div className="px-3 py-2 text-xs text-muted">Đang tải chủ đề…</div>
+              ) : (
+                projectSummaries.map((row) => {
+                  const key = row.project === null ? 'none' : row.project;
+                  const active =
+                    (row.project === null && scope === 'none') ||
+                    (row.project !== null && scope === row.project);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setScope(row.project === null ? 'none' : row.project!)}
+                      className={`rounded-md px-3 py-2 text-left text-sm ${
+                        active ? 'bg-brand/15 text-text font-medium' : 'text-muted hover:bg-bg'
+                      }`}
+                    >
+                      {row.project === null ? 'Không chủ đề' : row.project}
+                      <span className="ml-1 text-xs opacity-80">({row.total})</span>
+                    </button>
+                  );
+                })
+              )}
+            </nav>
+          </aside>
+
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="flex flex-col gap-2 flex-1 space-y-1">
+                <label className="text-xs font-bold text-muted">Tìm kiếm (Tên rút gọn / URL)</label>
+                <div className="flex gap-2">
+                  <Input
+                    value={qInput}
+                    onChange={(e) => setQInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setQApplied(qInput.trim());
+                        setPage(1);
+                      }
+                    }}
+                    placeholder="Link hoặc mã code sau đó nhấn Enter"
+                    className="flex-1"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {loadingLinks ? (
+              <div className="rounded-md border border-border border-dashed px-4 py-8 text-center text-sm text-muted">
+                Đang tải danh sách link…
+              </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="bg-bg text-muted">
+                      <tr>
+                        <th className="p-3">Chủ đề</th>
+                        <th className="p-3">Tên rút gọn</th>
+                        <th className="p-3 min-w-[200px]">Link rút gọn</th>
+                        <th className="p-3 w-[1%] whitespace-nowrap">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((it) => {
+                        const shortUrl = shortRedirectUrl(it.project, it.code);
+                        return (
+                          <tr key={it.id} className="border-t border-border">
+                            <td className="p-3 align-middle">
+                              {it.project === null ? (
+                                <span className="text-muted">Không chủ đề</span>
+                              ) : (
+                                <span className="font-medium text-text">{it.project}</span>
+                              )}
+                            </td>
+                            <td className="p-3 align-middle font-mono">{it.code}</td>
+                            <td className="p-3 align-middle">
+                              <a
+                                href={shortUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="min-w-0 font-mono text-sm text-brand underline-offset-2 hover:underline break-all"
+                                title={shortUrl}
+                              >
+                                {shortUrl}
+                              </a>
+                            </td>
+                            <td className="p-3 align-middle">
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="h-9 w-9 shrink-0 p-0"
+                                  title="Sao chép link"
+                                  aria-label="Sao chép link rút gọn"
+                                  onClick={async () => {
+                                    await navigator.clipboard.writeText(shortUrl);
+                                  }}
+                                >
+                                  <IconCopy className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="danger"
+                                  className="h-9 w-9 shrink-0 border-none p-0 text-[#fff]"
+                                  title="Xóa link"
+                                  aria-label="Xóa link"
+                                  onClick={async () => {
+                                    if (
+                                      !window.confirm(
+                                        'Xóa link này vĩnh viễn? Không thể hoàn tác.',
+                                      )
+                                    ) {
+                                      return;
+                                    }
+                                    try {
+                                      await deleteLink(it.id);
+                                      await refreshProjects();
+                                      await refreshLinks();
+                                    } catch (e: unknown) {
+                                      setError(
+                                        e instanceof Error ? e.message : 'Không xóa được link',
+                                      );
+                                    }
+                                  }}
+                                >
+                                  <IconTrash className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {items.length === 0 ? (
+                        <tr>
+                          <td className="p-3 text-muted" colSpan={4}>
+                            {emptyMessage}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+
+                {total > pageSize ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
+                    <span>
+                      Trang {page} / {Math.max(1, Math.ceil(total / pageSize))} — {total} link
+                    </span>
+                    <div className="flex gap-2">
                       <Button
                         size="sm"
-                        variant={it.isActive ? 'secondary' : 'danger'}
-                        onClick={async () => {
-                          await updateLink(it.id, { isActive: !it.isActive });
-                          await refresh();
-                        }}
+                        variant="secondary"
+                        disabled={page <= 1}
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
                       >
-                        {it.isActive ? 'Disable' : 'Enable'}
+                        Trước
                       </Button>
-                    </td>
-                  </tr>
-                ))}
-                {items.length === 0 ? (
-                  <tr>
-                    <td className="p-3 text-muted" colSpan={3}>
-                      No links yet.
-                    </td>
-                  </tr>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={page >= Math.ceil(total / pageSize)}
+                        onClick={() => setPage((p) => p + 1)}
+                      >
+                        Sau
+                      </Button>
+                    </div>
+                  </div>
                 ) : null}
-              </tbody>
-            </table>
+              </>
+            )}
           </div>
-        )}
+        </div>
       </CardContent>
     </Card>
   );

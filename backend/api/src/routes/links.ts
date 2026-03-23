@@ -1,12 +1,26 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { CreateLinkBodySchema } from '@ssl/shared';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { links } from '../db/schema';
-import { toPublicError } from '../http/errors';
+import { pgCodeDeep, toPublicError } from '../http/errors';
+import { resolveOwnerUserIdFromCookieOrNull } from '../auth/resolveOwnerUserId';
+import { codeForCustomAliasAttempt } from '../links/customAliasCode';
 import { randomCode } from '../links/code';
 import { env } from '../env';
+
+function linkInsertValues(
+  project: string | null,
+  code: string,
+  longUrl: string,
+  ownerUserId: string | null,
+) {
+  if (ownerUserId) {
+    return { project, code, longUrl, ownerUserId };
+  }
+  return { project, code, longUrl };
+}
 
 function shortUrlFor(project: string | null, code: string) {
   if (project) return new URL(`/r/${project}/${code}`, env.BASE_URL).toString();
@@ -28,34 +42,61 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
     try {
       const body = CreateLinkBodySchema.parse(req.body);
 
-      // Optional auth: if cookie present but invalid, treat as anonymous (-1 / marker -1).
-      let ownerUserId: string | null = null;
-      try {
-        await req.jwtVerify();
-        ownerUserId = req.user.sub;
-      } catch {
-        ownerUserId = null;
-      }
-      const anonymousMarker = ownerUserId ? 0 : -1;
+      const ownerUserId = await resolveOwnerUserIdFromCookieOrNull(req);
 
       const project = body.project ?? null;
-      const code = body.customAlias?.trim() || randomCode(7);
+      const customBase = body.customAlias?.trim();
 
-      const maxAttempts = body.customAlias ? 1 : 5;
-      let lastErr: unknown;
+      if (customBase) {
+        const maxAttempts = 100;
 
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const tryCode = codeForCustomAliasAttempt(customBase, attempt);
+          if (!tryCode) break;
+
+          try {
+            const inserted = await db
+              .insert(links)
+              .values(linkInsertValues(project, tryCode, body.longUrl, ownerUserId))
+              .returning({
+                id: links.id,
+                project: links.project,
+                code: links.code,
+                longUrl: links.longUrl,
+                createdAt: links.createdAt,
+              });
+
+            const row = inserted[0]!;
+            return reply.send({
+              id: row.id,
+              project: row.project,
+              code: row.code,
+              longUrl: row.longUrl,
+              shortUrl: shortUrlFor(row.project, row.code),
+              ownerUserId: ownerUserId ?? -1,
+              createdAt: row.createdAt.toISOString(),
+            });
+          } catch (err: unknown) {
+            if (pgCodeDeep(err) === '23505') continue;
+            throw err;
+          }
+        }
+
+        return reply.code(409).send({
+          code: 'CONFLICT',
+          message: 'Không thể tạo alias (đã thử thêm hậu tố -1, -2, …)',
+          details: { project, base: customBase },
+        });
+      }
+
+      const code = randomCode(7);
+
+      for (let attempt = 0; attempt < 5; attempt++) {
         const tryCode = attempt === 0 ? code : randomCode(8);
         try {
           const inserted = await db
             .insert(links)
-            .values({
-              project,
-              code: tryCode,
-              longUrl: body.longUrl,
-              ownerUserId,
-              anonymousMarker,
-            })
+            .values(linkInsertValues(project, tryCode, body.longUrl, ownerUserId))
             .returning({
               id: links.id,
               project: links.project,
@@ -72,12 +113,10 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
             longUrl: row.longUrl,
             shortUrl: shortUrlFor(row.project, row.code),
             ownerUserId: ownerUserId ?? -1,
-            anonymousMarker,
             createdAt: row.createdAt.toISOString(),
           });
-        } catch (err: any) {
-          lastErr = err;
-          if (err?.code === '23505') continue; // unique violation, retry
+        } catch (err: unknown) {
+          if (pgCodeDeep(err) === '23505') continue;
           throw err;
         }
       }
@@ -88,6 +127,7 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
         details: { project, code },
       });
     } catch (err) {
+      req.log.error({ err }, 'POST /api/links failed');
       const pub = toPublicError(err);
       return reply.code(pub.statusCode).send(pub);
     }
@@ -98,15 +138,26 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
     const Query = z.object({
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
-      project: z.string().trim().optional(),
+      project: z
+        .string()
+        .trim()
+        .optional()
+        .transform((v) => (v === '' ? undefined : v)),
       q: z.string().trim().optional(),
     });
     const q = Query.parse(req.query);
     const offset = (q.page - 1) * q.pageSize;
 
+    const projectFilter =
+      q.project === undefined
+        ? sql`true`
+        : q.project === '__none__'
+          ? isNull(links.project)
+          : eq(links.project, q.project);
+
     const where = and(
       eq(links.ownerUserId, req.user.sub),
-      q.project ? eq(links.project, q.project) : sql`true`,
+      projectFilter,
       q.q
         ? or(ilike(links.code, `%${q.q}%`), ilike(links.longUrl, `%${q.q}%`))
         : sql`true`,
@@ -135,6 +186,29 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
       page: q.page,
       pageSize: q.pageSize,
       total: Number(totalRows[0]?.count ?? 0),
+    });
+  });
+
+  /** Tổng hợp distinct project (kể cả null) + số link; sort theo link mới nhất trong bucket. */
+  app.get('/links/projects', { preHandler: app.authenticate }, async (req, reply) => {
+    const userId = req.user.sub;
+    const rows = await db
+      .select({
+        project: links.project,
+        total: sql<number>`(count(*)::int)`,
+        activeCount: sql<number>`(count(*) filter (where ${links.isActive})::int)`,
+      })
+      .from(links)
+      .where(eq(links.ownerUserId, userId))
+      .groupBy(links.project)
+      .orderBy(desc(sql`max(${links.createdAt})`));
+
+    return reply.send({
+      items: rows.map((r) => ({
+        project: r.project,
+        total: Number(r.total),
+        activeCount: Number(r.activeCount),
+      })),
     });
   });
 

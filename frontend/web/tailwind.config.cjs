@@ -9,6 +9,10 @@ module.exports = {
     fontFamily: defaultTheme.fontFamily,
     fontWeight: defaultTheme.fontWeight,
     extend: {
+      // Tailwind v4 + legacy config: cần merge rõ fontSize/lineHeight mặc định,
+      // nếu không các class như `text-sm`, `text-xs`, `leading-*` sẽ không được generate.
+      fontSize: defaultTheme.fontSize,
+      lineHeight: defaultTheme.lineHeight,
       fontFamily: {
         sans: ['VL Axiforma', 'sans-serif'],
       },

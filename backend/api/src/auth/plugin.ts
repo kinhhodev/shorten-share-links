@@ -33,7 +33,8 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   });
 
   app.decorate('authenticate', async function authenticate(request: FastifyRequest) {
-    await request.jwtVerify();
+    // Chỉ đọc cookie ssl_token — bỏ qua Authorization: Bearer để tránh token lạ (extension/Postman) làm fail verify.
+    await request.jwtVerify({ onlyCookie: true });
   });
 };
 

@@ -28,10 +28,8 @@ export const CreateLinkResponseSchema = z.object({
   code: z.string(),
   longUrl: z.string().url(),
   shortUrl: z.string().url(),
-  /** UUID user hoặc -1 khi ẩn danh */
+  /** UUID user hoặc -1 khi ẩn danh (DB: owner_user_id null) */
   ownerUserId: z.union([z.string().uuid(), z.literal(-1)]),
-  /** -1 = ẩn danh, 0 = đã đăng nhập */
-  anonymousMarker: z.number().int(),
   createdAt: z.string(),
 });
 
@@ -93,3 +91,20 @@ export const ListLinksResponseSchema = z.object({
 });
 
 export type ListLinksResponse = z.infer<typeof ListLinksResponseSchema>;
+
+/** Giá trị query `project` để lọc link `project IS NULL` (không trùng slug hợp lệ — slug không chứa `_`). */
+export const DASHBOARD_PROJECT_NONE_QUERY = '__none__' as const;
+
+export const LinkProjectSummarySchema = z.object({
+  project: z.string().nullable(),
+  total: z.number().int().min(0),
+  activeCount: z.number().int().min(0),
+});
+
+export type LinkProjectSummary = z.infer<typeof LinkProjectSummarySchema>;
+
+export const LinkProjectsResponseSchema = z.object({
+  items: z.array(LinkProjectSummarySchema),
+});
+
+export type LinkProjectsResponse = z.infer<typeof LinkProjectsResponseSchema>;

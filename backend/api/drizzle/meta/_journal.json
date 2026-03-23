@@ -15,6 +15,20 @@
       "when": 1773977131334,
       "tag": "0001_green_wallow",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1774192627537,
+      "tag": "0002_medical_firebrand",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774194159463,
+      "tag": "0003_clever_surge",
+      "breakpoints": true
     }
   ]
 }

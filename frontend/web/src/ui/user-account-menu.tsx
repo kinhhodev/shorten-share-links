@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from './button';
 import { cn } from '../lib/cn';
 
@@ -49,6 +50,14 @@ export function UserAccountMenu({
           role="menu"
           className="absolute left-0 top-full z-20 mt-1 min-w-[11rem] rounded-md border border-border bg-surface py-1 shadow-card"
         >
+          <Link
+            to="/dashboard"
+            role="menuitem"
+            className="flex w-full px-3 py-2 text-left text-sm text-text hover:bg-blue-300 cursor-pointer no-underline"
+            onClick={() => setOpen(false)}
+          >
+            Dashboard
+          </Link>
           <button
             type="button"
             role="menuitem"

@@ -51,3 +51,9 @@ body {
   @apply bg-bg text-text antialiased font-sans;
 }
 
+/* Dashboard mobile: chừa khoảng phải cho mũi tên native select (Safari/WebKit) */
+.dashboard-topic-select {
+  padding-right: 2.75rem;
+  -webkit-padding-end: 2.75rem;
+  padding-inline-end: 2.75rem;
+}
