@@ -46,3 +46,25 @@ export const links = pgTable(
   }),
 );
 
+/** Chia sẻ chủ đề: bản ghi chỉ để UI / thu hồi; link đã copy sang người nhận không bị xóa khi xóa bản ghi này. */
+export const projectShares = pgTable(
+  'project_shares',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    project: text('project'),
+    recipientUserId: uuid('recipient_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    ownerIdx: index('project_shares_owner_idx').on(t.ownerUserId),
+    ownerProjectRecipientUnique: uniqueIndex('project_shares_owner_project_recipient_unique')
+      .on(t.ownerUserId, t.project, t.recipientUserId)
+      .where(sql`true`),
+  }),
+);
+

@@ -15,17 +15,22 @@ import {
   deleteLink,
   listLinkProjects,
   listLinks,
+  listProjectShares,
   listTrash,
   restoreTrashBatch,
+  revokeProjectShare,
+  shareProject,
   softDeleteTopic,
 } from './api/dashboard';
 import { createLink } from './api/links';
 import { AuthModal, type AuthMode } from './auth/AuthModal';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader } from './ui/card';
+import { Dialog } from './ui/dialog';
 import { Input } from './ui/input';
 import { UserAccountMenu } from './ui/user-account-menu';
-import { IconChevronDown, IconCopy, IconTrash } from './ui/icons';
+import { IconChevronDown, IconCopy, IconShare, IconTrash } from './ui/icons';
+import { cn } from './lib/cn';
 import { getRecaptchaToken } from './lib/recaptcha';
 import { shortRedirectUrl } from './env';
 
@@ -255,6 +260,143 @@ type DashboardLinkRow = {
 
 const DASHBOARD_PAGE_SIZE = 20;
 
+function ShareTopicDialog({
+  open,
+  onClose,
+  row,
+  onShared,
+}: {
+  open: boolean;
+  onClose: () => void;
+  row: LinkProjectSummary | null;
+  onShared: () => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [shareItems, setShareItems] = useState<
+    { id: string; recipientEmail: string; createdAt: string }[]
+  >([]);
+  const [loadingList, setLoadingList] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !row) return;
+    setDialogError(null);
+    setEmail('');
+    let cancelled = false;
+    (async () => {
+      setLoadingList(true);
+      try {
+        const res = await listProjectShares(row.project);
+        if (!cancelled) setShareItems(res.items);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setDialogError(e instanceof Error ? e.message : 'Không tải được danh sách chia sẻ');
+        }
+      } finally {
+        if (!cancelled) setLoadingList(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, row]);
+
+  const titleLabel = row ? (row.project === null ? 'Không chủ đề' : row.project) : '';
+
+  if (!row) return null;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={`Chia sẻ chủ đề: ${titleLabel}`}
+    >
+      <p className="text-xs text-muted">
+        Mỗi lần chia sẻ sẽ <strong className="text-text">sao chép toàn bộ link</strong> trong chủ đề sang
+        tài khoản người nhận. Khi bạn thu hồi chia sẻ (bên dưới), link của họ{' '}
+        <strong className="text-text">không bị xóa</strong>.
+      </p>
+      {dialogError ? <div className="mt-2 text-sm text-danger">{dialogError}</div> : null}
+
+      <form
+        className="mt-4 flex flex-col gap-2 sm:flex-row"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const e2 = email.trim();
+          if (!e2) return;
+          setSending(true);
+          setDialogError(null);
+          try {
+            await shareProject(row.project, e2);
+            setEmail('');
+            const res = await listProjectShares(row.project);
+            setShareItems(res.items);
+            onShared();
+          } catch (err: unknown) {
+            setDialogError(err instanceof Error ? err.message : 'Không gửi được chia sẻ');
+          } finally {
+            setSending(false);
+          }
+        }}
+      >
+        <Input
+          type="email"
+          value={email}
+          onChange={(ev) => setEmail(ev.target.value)}
+          placeholder="Email người nhận (đã đăng ký)"
+          className="flex-1"
+          autoComplete="email"
+        />
+        <Button type="submit" variant="primary" className="shrink-0 border-none" disabled={sending}>
+          {sending ? 'Đang gửi…' : 'Gửi chia sẻ'}
+        </Button>
+      </form>
+
+      <div className="mt-4 border-t border-border pt-3">
+        <div className="text-xs font-bold uppercase tracking-wide text-muted">Đã chia sẻ cho</div>
+        {loadingList ? (
+          <div className="mt-2 text-sm text-muted">Đang tải…</div>
+        ) : shareItems.length === 0 ? (
+          <div className="mt-2 text-sm text-muted">Chưa có người nhận.</div>
+        ) : (
+          <ul className="mt-2 space-y-2">
+            {shareItems.map((it) => (
+              <li
+                key={it.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-2 py-2 text-sm"
+              >
+                <span className="min-w-0 font-mono text-xs">{it.recipientEmail}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="shrink-0"
+                  onClick={async () => {
+                    if (!window.confirm('Thu hồi chia sẻ với người này? Link của họ vẫn giữ trong tài khoản họ.')) {
+                      return;
+                    }
+                    setDialogError(null);
+                    try {
+                      await revokeProjectShare(it.id);
+                      setShareItems((prev) => prev.filter((x) => x.id !== it.id));
+                      onShared();
+                    } catch (err: unknown) {
+                      setDialogError(err instanceof Error ? err.message : 'Không thu hồi được');
+                    }
+                  }}
+                >
+                  Thu hồi
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 function DashboardTopicAccordion({
   row,
   qApplied,
@@ -265,6 +407,8 @@ function DashboardTopicAccordion({
   onDeleteTopic,
   setError,
   listVersion,
+  sharedRecipientCount,
+  onShareClick,
 }: {
   row: LinkProjectSummary;
   qApplied: string;
@@ -276,9 +420,12 @@ function DashboardTopicAccordion({
   setError: (msg: string | null) => void;
   /** Tăng sau khi danh sách chủ đề / link thay đổi — refetch bảng con */
   listVersion: number;
+  sharedRecipientCount: number;
+  onShareClick: () => void;
 }) {
   const projectParam = row.project === null ? DASHBOARD_PROJECT_NONE_QUERY : row.project!;
   const label = row.project === null ? 'Không chủ đề' : row.project;
+  const isShared = sharedRecipientCount > 0;
 
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<DashboardLinkRow[]>([]);
@@ -334,7 +481,12 @@ function DashboardTopicAccordion({
   const totalPages = Math.max(1, Math.ceil(total / DASHBOARD_PAGE_SIZE));
 
   return (
-    <div className="rounded-md border border-border">
+    <div
+      className={cn(
+        'rounded-md border',
+        isShared ? 'border-emerald-500/50 bg-emerald-500/[0.07]' : 'border-border',
+      )}
+    >
       <div className="flex items-stretch gap-2">
         <button
           type="button"
@@ -345,10 +497,29 @@ function DashboardTopicAccordion({
           <IconChevronDown
             className={`h-4 w-4 shrink-0 text-muted transition-transform ${expanded ? 'rotate-180' : ''}`}
           />
+          {isShared ? (
+            <span className="inline-flex shrink-0" title="Chủ đề đã được chia sẻ">
+              <IconShare className="h-4 w-4 text-emerald-600" aria-hidden />
+            </span>
+          ) : null}
           <span className="min-w-0 font-medium text-text">{label}</span>
           <span className="shrink-0 text-xs text-muted">({row.total})</span>
         </button>
-        <div className="flex shrink-0 items-center pr-2">
+        <div className="flex shrink-0 items-center gap-1 pr-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-9 w-9 shrink-0 p-0"
+            disabled={deletingTopic || row.total === 0}
+            title="Chia sẻ chủ đề"
+            aria-label="Chia sẻ chủ đề"
+            onClick={(e) => {
+              e.stopPropagation();
+              onShareClick();
+            }}
+          >
+            <IconShare className="h-4 w-4" />
+          </Button>
           <Button
             size="sm"
             variant="danger"
@@ -553,6 +724,7 @@ function DashboardTopicsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
   const [deletingTopicKey, setDeletingTopicKey] = useState<string | null>(null);
+  const [shareRow, setShareRow] = useState<LinkProjectSummary | null>(null);
 
   const refreshProjects = useCallback(async () => {
     setLoadingProjects(true);
@@ -622,6 +794,14 @@ function DashboardTopicsPage() {
 
   return (
     <>
+      <ShareTopicDialog
+        open={shareRow !== null}
+        onClose={() => setShareRow(null)}
+        row={shareRow}
+        onShared={() => {
+          void refreshProjects();
+        }}
+      />
       {error ? <div className="text-sm text-danger">{error}</div> : null}
 
       <div className="min-w-0 space-y-3">
@@ -663,6 +843,7 @@ function DashboardTopicsPage() {
                   qApplied={qApplied}
                   expanded={!!expandedTopics[projectKey]}
                   listVersion={listVersion}
+                  sharedRecipientCount={row.sharedRecipientCount ?? 0}
                   onToggle={() =>
                     setExpandedTopics((prev) => ({
                       ...prev,
@@ -673,6 +854,7 @@ function DashboardTopicsPage() {
                   deletingTopic={deletingTopicKey === projectKey}
                   onDeleteTopic={() => softDeleteTopicFlow(row.project)}
                   setError={setError}
+                  onShareClick={() => setShareRow(row)}
                 />
               );
             })}

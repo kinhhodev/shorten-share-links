@@ -101,6 +101,8 @@ export const LinkProjectSummarySchema = z.object({
   project: z.string().nullable(),
   total: z.number().int().min(0),
   activeCount: z.number().int().min(0),
+  /** Số người đã nhận chia sẻ chủ đề (theo bản ghi project_shares) */
+  sharedRecipientCount: z.number().int().min(0).optional().default(0),
 });
 
 export type LinkProjectSummary = z.infer<typeof LinkProjectSummarySchema>;

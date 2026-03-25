@@ -22,6 +22,29 @@ export function IconCopy({ className, ...props }: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Chia sẻ (mũi tên ra ngoài). */
+export function IconShare({ className, ...props }: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cn('shrink-0', className)}
+      aria-hidden
+      {...props}
+    >
+      <path d="M4 12v8a2 2 0 0 0 2 2h8" />
+      <path d="M16 6h2v2" />
+      <path d="m19 3-9 9" />
+      <path d="M14 3h5v5" />
+    </svg>
+  );
+}
+
 /** Mũi tên xuống (mở rộng / accordion). */
 export function IconChevronDown({ className, ...props }: SVGProps<SVGSVGElement>) {
   return (

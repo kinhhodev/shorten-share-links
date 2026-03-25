@@ -10,6 +10,33 @@ export async function listLinkProjects() {
   return apiFetch<LinkProjectsResponse>('/links/projects');
 }
 
+export async function listProjectShares(project: string | null) {
+  const p = project === null ? DASHBOARD_PROJECT_NONE_QUERY : project;
+  return apiFetch<{ items: { id: string; recipientEmail: string; createdAt: string }[] }>(
+    `/links/projects/shares?project=${encodeURIComponent(p)}`,
+  );
+}
+
+export async function shareProject(project: string | null, recipientEmail: string) {
+  return apiFetch<{ ok: boolean; copiedCount: number; recipientEmail: string }>(
+    '/links/projects/share',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        project: project === null ? DASHBOARD_PROJECT_NONE_QUERY : project,
+        recipientEmail,
+      }),
+    },
+  );
+}
+
+export async function revokeProjectShare(shareId: string) {
+  return apiFetch<{ ok: boolean }>(
+    `/links/projects/shares/${encodeURIComponent(shareId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export async function listLinks(params: {
   page?: number;
   pageSize?: number;

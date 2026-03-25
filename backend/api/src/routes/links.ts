@@ -4,7 +4,7 @@ import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { CreateLinkBodySchema, DASHBOARD_PROJECT_NONE_QUERY, ProjectSchema } from '@ssl/shared';
 import { z } from 'zod';
 import { db } from '../db/client';
-import { links } from '../db/schema';
+import { links, projectShares, users } from '../db/schema';
 import { redis } from '../cache/redis';
 import { pgCodeDeep, toPublicError } from '../http/errors';
 import { resolveOwnerUserIdFromCookieOrNull } from '../auth/resolveOwnerUserId';
@@ -215,13 +215,175 @@ export const linkRoutes: FastifyPluginAsync = async (app) => {
       .groupBy(links.project)
       .orderBy(desc(sql`max(${links.createdAt})`));
 
+    const shareRows = await db
+      .select({
+        project: projectShares.project,
+        n: sql<number>`(count(*)::int)`,
+      })
+      .from(projectShares)
+      .where(eq(projectShares.ownerUserId, userId))
+      .groupBy(projectShares.project);
+
+    const shareMap = new Map<string | null, number>();
+    for (const sr of shareRows) {
+      shareMap.set(sr.project, Number(sr.n));
+    }
+
     return reply.send({
       items: rows.map((r) => ({
         project: r.project,
         total: Number(r.total),
         activeCount: Number(r.activeCount),
+        sharedRecipientCount: shareMap.get(r.project) ?? 0,
       })),
     });
+  });
+
+  /** Danh sách người đã nhận chia sẻ theo chủ đề (chỉ owner). */
+  app.get('/links/projects/shares', { preHandler: app.authenticate }, async (req, reply) => {
+    const Query = z.object({
+      project: z.union([z.literal(DASHBOARD_PROJECT_NONE_QUERY), ProjectSchema]),
+    });
+    const q = Query.parse(req.query);
+    const ownerId = req.user.sub;
+    const projectValue = q.project === DASHBOARD_PROJECT_NONE_QUERY ? null : q.project;
+    const projectCond =
+      projectValue === null ? isNull(projectShares.project) : eq(projectShares.project, projectValue);
+
+    const rows = await db
+      .select({
+        id: projectShares.id,
+        recipientEmail: users.email,
+        createdAt: projectShares.createdAt,
+      })
+      .from(projectShares)
+      .innerJoin(users, eq(users.id, projectShares.recipientUserId))
+      .where(and(eq(projectShares.ownerUserId, ownerId), projectCond))
+      .orderBy(desc(projectShares.createdAt));
+
+    return reply.send({
+      items: rows.map((r) => ({
+        id: r.id,
+        recipientEmail: r.recipientEmail,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    });
+  });
+
+  /**
+   * Chia sẻ chủ đề: copy toàn bộ link (đang hoạt động) sang tài khoản người nhận + ghi nhận share.
+   * Thu hồi share (DELETE bản ghi project_shares) không xóa link đã copy của người nhận.
+   */
+  app.post('/links/projects/share', { preHandler: app.authenticate }, async (req, reply) => {
+    const Body = z.object({
+      project: z.union([z.literal(DASHBOARD_PROJECT_NONE_QUERY), ProjectSchema]),
+      recipientEmail: z.string().trim().email(),
+    });
+    const body = Body.parse(req.body);
+    const ownerId = req.user.sub;
+    const projectValue = body.project === DASHBOARD_PROJECT_NONE_QUERY ? null : body.project;
+    const linkProjectCond =
+      projectValue === null ? isNull(links.project) : eq(links.project, projectValue);
+
+    const emailNorm = body.recipientEmail.trim().toLowerCase();
+    const [recipient] = await db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(sql`lower(${users.email}) = ${emailNorm}`)
+      .limit(1);
+
+    if (!recipient) {
+      return reply.code(404).send({
+        code: 'NOT_FOUND',
+        message: 'Không tìm thấy tài khoản với email này',
+      });
+    }
+    if (recipient.id === ownerId) {
+      return reply.code(400).send({
+        code: 'BAD_REQUEST',
+        message: 'Không thể chia sẻ chủ đề cho chính mình',
+      });
+    }
+
+    const shareProjectCond =
+      projectValue === null
+        ? isNull(projectShares.project)
+        : eq(projectShares.project, projectValue);
+    const already = await db
+      .select({ id: projectShares.id })
+      .from(projectShares)
+      .where(
+        and(
+          eq(projectShares.ownerUserId, ownerId),
+          shareProjectCond,
+          eq(projectShares.recipientUserId, recipient.id),
+        ),
+      )
+      .limit(1);
+    if (already[0]) {
+      return reply.code(409).send({
+        code: 'ALREADY_SHARED',
+        message: 'Bạn đã chia sẻ chủ đề này cho người nhận rồi',
+      });
+    }
+
+    const sourceLinks = await db
+      .select({
+        project: links.project,
+        code: links.code,
+        longUrl: links.longUrl,
+      })
+      .from(links)
+      .where(and(eq(links.ownerUserId, ownerId), isNull(links.deletedAt), linkProjectCond));
+
+    if (sourceLinks.length === 0) {
+      return reply.code(400).send({
+        code: 'NO_LINKS',
+        message: 'Chủ đề không có link nào để chia sẻ',
+      });
+    }
+
+    let copied = 0;
+    for (const src of sourceLinks) {
+      try {
+        await db.insert(links).values({
+          project: src.project,
+          code: src.code,
+          longUrl: src.longUrl,
+          ownerUserId: recipient.id,
+        });
+        copied += 1;
+      } catch (err: unknown) {
+        if (pgCodeDeep(err) === '23505') continue;
+        throw err;
+      }
+    }
+
+    await db.insert(projectShares).values({
+      ownerUserId: ownerId,
+      project: projectValue,
+      recipientUserId: recipient.id,
+    });
+
+    return reply.send({
+      ok: true,
+      copiedCount: copied,
+      recipientEmail: recipient.email,
+    });
+  });
+
+  /** Thu hồi chia sẻ (chỉ xóa bản ghi share; link của người nhận giữ nguyên). */
+  app.delete('/links/projects/shares/:shareId', { preHandler: app.authenticate }, async (req, reply) => {
+    const Params = z.object({ shareId: z.string().uuid() });
+    const { shareId } = Params.parse(req.params);
+    const removed = await db
+      .delete(projectShares)
+      .where(and(eq(projectShares.id, shareId), eq(projectShares.ownerUserId, req.user.sub)))
+      .returning({ id: projectShares.id });
+    if (!removed[0]) {
+      return reply.code(404).send({ code: 'NOT_FOUND', message: 'Không tìm thấy bản ghi chia sẻ' });
+    }
+    return reply.send({ ok: true });
   });
 
   /** Postgres/pg có thể trả `timestamp` dạng string — chuẩn hoá trước khi sort/JSON. */
